@@ -1,0 +1,8 @@
+Faker==38.2.0
+pandas==2.3.3
+streamlit==1.51.0
+xlsxwriter==3.2.9
+openpyxl
+sqlalchemy
+plotly
+fpdf2
