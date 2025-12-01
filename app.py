@@ -9,9 +9,8 @@ import os
 # ==========================================
 # 1. 페이지 설정 및 디자인 시스템
 # ==========================================
-st.set_page_config(page_title="Data Cleaner Pro", page_icon="💎", layout="wide")
+st.set_page_config(page_title="Data Cleaner Pro", page_icon="💎", layout="wide", initial_sidebar_state="collapsed")
 
-# [핵심] 세션 상태 초기화 (데이터 유지용)
 if 'page' not in st.session_state: st.session_state['page'] = 'dashboard'
 if 'analyzed_data' not in st.session_state: st.session_state['analyzed_data'] = None
 
@@ -30,8 +29,8 @@ st.markdown("""
     .stApp { background-color: #0f1117; }
 
     /* 네비게이션 버튼 */
-    .nav-btn { width: 100%; border-radius: 8px; border: 1px solid #334155; background-color: #1e293b; color: white; font-weight: 600; margin-bottom: 10px; }
-    
+    .nav-btn-container { display: flex; justify-content: flex-start; margin-bottom: 20px; }
+
     /* KPI 카드 */
     .kpi-card { background-color: #1e2330; border: 1px solid #334155; border-radius: 16px; padding: 20px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .kpi-value { font-size: 3.5rem; font-weight: 800; margin: 0; line-height: 1.2; }
@@ -40,8 +39,22 @@ st.markdown("""
     .text-orange { color: #fb923c; }
     .text-purple { color: #c084fc; }
     
-    /* 버튼 공통 */
-    .stButton button, div[data-testid="stDownloadButton"] button { height: 50px !important; border-radius: 10px !important; font-weight: 700 !important; border: none !important; width: 100%; }
+    /* 버튼 공통 스타일 */
+    .stButton button, div[data-testid="stDownloadButton"] button {
+        height: 55px !important;
+        border-radius: 10px !important;
+        font-weight: 700 !important;
+        font-size: 1.05rem !important;
+        border: none !important;
+        width: 100%;
+        margin-top: 0px !important;
+    }
+    
+    /* 네비게이션용 작은 버튼 제외 */
+    div[data-testid="column"] > div > div > div > div > div > button {
+       border: 1px solid #334155;
+    }
+
     button[kind="primary"] { background: linear-gradient(135deg, #4f46e5, #7c3aed) !important; color: white !important; }
     button[kind="secondary"] { background-color: #334155 !important; color: #f8fafc !important; border: 1px solid #475569 !important; }
     
@@ -49,41 +62,38 @@ st.markdown("""
     .stTabs [data-baseweb="tab-list"] { gap: 10px; border-bottom: 1px solid #334155; }
     .stTabs [data-baseweb="tab"] { height: 50px; background-color: transparent; border: none; color: #64748b; }
     .stTabs [aria-selected="true"] { background-color: #1e293b !important; color: #60a5fa !important; border-bottom: 2px solid #60a5fa !important; }
+    
+    /* 체크박스 스타일 */
+    .stCheckbox label { color: #cbd5e1; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 사이드바 (네비게이션)
+# 2. 상단 네비게이션 & 헤더
 # ==========================================
-with st.sidebar:
-    st.markdown("### 💎 Menu")
-    
-    if st.session_state['page'] == 'dashboard':
-        st.info("현재: 🏠 대시보드")
-        if st.button("⚙️ 관리자 설정 (매핑)", use_container_width=True):
-            navigate_to('admin')
-        
-        # 데이터가 있을 때만 초기화 버튼 표시
-        if st.session_state['analyzed_data'] is not None:
-            st.markdown("---")
-            if st.button("🔄 새 파일 분석하기 (초기화)", type="secondary", use_container_width=True):
-                reset_analysis()
+col_nav, col_header = st.columns([0.8, 11.2])
 
+with col_nav:
+    if st.session_state['page'] == 'dashboard':
+        if st.button("⚙️", help="관리자 설정"): navigate_to('admin')
     else:
-        st.warning("현재: ⚙️ 관리자 모드")
-        if st.button("🏠 대시보드로 복귀", use_container_width=True):
-            navigate_to('dashboard')
-            
-    st.markdown("---")
-    st.caption("Data Cleaner Pro v8.1")
+        if st.button("🏠", help="대시보드 복귀"): navigate_to('dashboard')
+
+with col_header:
+    if st.session_state['page'] == 'dashboard':
+        st.markdown("<h1 style='margin:0; padding:0; font-size: 2.2rem;'>💎 Data Cleaner Pro</h1>", unsafe_allow_html=True)
+    else:
+        st.markdown("<h1 style='margin:0; padding:0; font-size: 2.2rem; color:#94a3b8;'>⚙️ Admin Settings</h1>", unsafe_allow_html=True)
+
+st.write("")
 
 # ==========================================
 # 3. 화면 라우팅
 # ==========================================
 
-# [PAGE 1] 관리자 설정 페이지
+# [PAGE 1] 관리자 설정
 if st.session_state['page'] == 'admin':
-    st.title("⚙️ 관리자 설정 (Admin Page)")
+    st.markdown("---")
     col_set1, col_set2 = st.columns([2, 1])
     
     with col_set1:
@@ -97,25 +107,18 @@ if st.session_state['page'] == 'admin':
         if st.button("✅ 규칙 저장하기", type="primary", use_container_width=True):
             new_map = dict(zip(edit_df['입력값(오타)'], edit_df['변환값(정준)']))
             cleaner.save_mapping(new_map)
-            st.toast("저장되었습니다!", icon="🎉")
+            st.toast("매핑 규칙 저장 완료!", icon="🎉")
             
         st.markdown("---")
-        with st.expander("⚠️ DB 초기화"):
+        with st.expander("⚠️ DB 관리"):
             if st.button("🗑️ 모든 데이터 삭제", use_container_width=True):
                 database.clear_database()
-                st.toast("DB가 초기화되었습니다.", icon="💥")
+                st.toast("DB 초기화 완료.", icon="💥")
 
-# [PAGE 2] 메인 대시보드 페이지
+# [PAGE 2] 메인 대시보드
 else:
-    st.markdown("""
-        <h1 style='font-size: 3rem; margin-bottom:0;'>💎 Data Cleaner Pro</h1>
-        <p style='color:#94a3b8; font-size:1.2rem; margin-bottom:30px;'>
-            압도적인 속도, 완벽한 데이터 정제 솔루션
-        </p>
-    """, unsafe_allow_html=True)
-
-    # 1. 파일 업로드 로직 (세션에 데이터가 없으면 표시)
     if st.session_state['analyzed_data'] is None:
+        st.markdown('<p style="color:#94a3b8; font-size:1.1rem;">복잡한 명단 정리, AI 자동화로 1초 만에 해결하세요.</p>', unsafe_allow_html=True)
         uploaded_file = st.file_uploader("분석할 엑셀 파일을 드래그하거나 선택하세요", type=['xlsx'])
         
         if uploaded_file:
@@ -126,7 +129,6 @@ else:
                     end_time = time.time()
                     
                     if msg == "Success":
-                        # [핵심] 결과를 세션 상태에 저장 (페이지 이동해도 유지됨)
                         st.session_state['analyzed_data'] = {
                             'excel_buffer': excel_buffer,
                             'cleaned_data': cleaned_data,
@@ -134,14 +136,19 @@ else:
                             'filename': uploaded_file.name,
                             'elapsed': f"{end_time - start_time:.2f}s"
                         }
-                        st.rerun() # 새로고침하여 결과 화면으로 전환
+                        st.rerun()
                     else:
-                        st.error(f"⚠️ 오류가 발생했습니다: {msg}")
+                        st.error(f"⚠️ 오류: {msg}")
                 except Exception as e:
-                    st.error(f"처리 중 예외 발생: {e}")
+                    st.error(f"예외 발생: {e}")
 
-    # 2. 결과 대시보드 로직 (데이터가 있으면 표시)
     else:
+        # 상단 재분석 버튼
+        col_dummy, col_reset = st.columns([8, 2])
+        with col_reset:
+            if st.button("🔄 새 파일 분석", type="secondary", use_container_width=True):
+                reset_analysis()
+
         data = st.session_state['analyzed_data']
         cleaned_data = data['cleaned_data']
         trash_data = data['trash_data']
@@ -161,14 +168,17 @@ else:
 
         # 컨트롤 패널
         st.subheader("🛠️ 작업 컨트롤 패널")
+        
         with st.container():
+            # [핵심 수정] 체크박스를 버튼들 윗줄로 분리하여 배치
+            col_opt, _ = st.columns([2, 8]) 
+            with col_opt:
+                mask_check = st.checkbox("🔒 개인정보 마스킹 (이름/번호 가리기)", value=True)
+            
+            # 버튼들은 같은 줄에 배치 (완벽한 정렬 보장)
             col_act1, col_act2, col_act3 = st.columns(3, gap="medium")
             
             with col_act1:
-                # Spacer
-                st.markdown('<div style="height: 29px;"></div>', unsafe_allow_html=True)
-                mask_check = st.checkbox("🔒 마스킹 다운로드", value=True)
-                
                 final_buffer = excel_buffer
                 if mask_check:
                     masked_dict = {k: cleaner.mask_personal_info(v) for k,v in cleaned_data.items()}
@@ -176,12 +186,16 @@ else:
                     with pd.ExcelWriter(final_buffer, engine='xlsxwriter') as w:
                         for k, v in masked_dict.items(): v.to_excel(w, sheet_name=k, index=False)
                 
-                st.download_button("💾 엑셀 다운로드", data=final_buffer.getvalue(), file_name=f"Cleaned_{filename}", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary", use_container_width=True)
+                st.download_button(
+                    "💾 엑셀 다운로드", 
+                    data=final_buffer.getvalue(), 
+                    file_name=f"Cleaned_{filename}", 
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", 
+                    type="primary", 
+                    use_container_width=True
+                )
 
             with col_act2:
-                st.markdown('<div style="height: 29px;"></div>', unsafe_allow_html=True)
-                st.write("") # Spacer for checkbox alignment
-                
                 stats = {'total_rows': total_clean+total_trash, 'removed_rows': total_trash, 'missing_info_rows': 0}
                 font_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts', 'NanumGothic.ttf')
                 
@@ -194,8 +208,6 @@ else:
                         except: st.error("실패")
 
             with col_act3:
-                st.markdown('<div style="height: 29px;"></div>', unsafe_allow_html=True)
-                st.write("") # Spacer
                 if st.button("🗄️ DB에 저장하기", use_container_width=True):
                     suc, m = database.save_to_db(cleaned_data, filename)
                     if suc: st.toast("DB 저장 완료!", icon="✅")
@@ -206,7 +218,6 @@ else:
         # 탭 콘텐츠
         t1, t2, t3 = st.tabs(["📊 인사이트 & 필터", "🗑️ 휴지통 (중복)", "💾 DB 히스토리"])
         
-        # [Tab 1] 대시보드
         with t1:
             if cleaned_data:
                 c_sel1, c_sel2 = st.columns([1, 4])
@@ -239,17 +250,10 @@ else:
                                     fig = px.pie(chart_data, values='Count', names=col_name, title=f"{col_name} 비율", hole=0.3, template="plotly_dark")
                                     fig.update_traces(textposition='inside', textinfo='percent+label')
                                 else:
-                                    # [수정] 세로 막대 그래프 (x=col_name, y='Count')
                                     top_data = chart_data.head(10)
                                     fig = px.bar(
-                                        top_data, 
-                                        x=col_name, 
-                                        y='Count', 
-                                        title=f"{col_name} TOP 10", 
-                                        text='Count', 
-                                        template="plotly_dark"
+                                        top_data, x=col_name, y='Count', title=f"{col_name} TOP 10", text='Count', template="plotly_dark"
                                     )
-                                    # X축 레이블이 잘리지 않도록 각도 조정 (자동)
                                     fig.update_layout(xaxis_tickangle=-45)
                                 
                                 fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=400)
@@ -260,7 +264,6 @@ else:
                 else: st.warning("데이터 없음")
             else: st.info("데이터 없음")
 
-        # [Tab 2] 휴지통
         with t2:
             if trash_data:
                 full_trash = pd.concat(trash_data)
@@ -271,7 +274,6 @@ else:
                 st.dataframe(subset, use_container_width=True, hide_index=True)
             else: st.success("중복 없음")
 
-        # [Tab 3] DB
         with t3:
             tbls = database.get_table_names()
             if tbls:
