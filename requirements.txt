@@ -6,3 +6,4 @@ openpyxl
 sqlalchemy
 plotly
 fpdf2
+python-dotenv
