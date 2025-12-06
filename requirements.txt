@@ -1,9 +1,10 @@
-Faker==38.2.0
-pandas==2.3.3
-streamlit==1.51.0
-xlsxwriter==3.2.9
+streamlit
+pandas
 openpyxl
+xlsxwriter
 sqlalchemy
+faker
 plotly
 fpdf2
+python-calamine
 python-dotenv

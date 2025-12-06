@@ -3,7 +3,7 @@ import pandas as pd
 import io
 import plotly.express as px
 import time
-from modules import cleaner, database, reporter
+from modules import cleaner, database, reporter, mailer
 import os
 from dotenv import load_dotenv
 
@@ -23,12 +23,17 @@ if 'page' not in st.session_state: st.session_state['page'] = 'dashboard'
 if 'analyzed_data' not in st.session_state: st.session_state['analyzed_data'] = None
 if 'admin_logged_in' not in st.session_state: st.session_state['admin_logged_in'] = False
 
+# 템플릿 적용된 데이터 저장을 위한 상태 변수
+if 'mail_df' not in st.session_state: st.session_state['mail_df'] = None
+if 'current_sheet' not in st.session_state: st.session_state['current_sheet'] = None
+
 def navigate_to(page):
     st.session_state['page'] = page
     st.rerun()
 
 def reset_analysis():
     st.session_state['analyzed_data'] = None
+    st.session_state['mail_df'] = None 
     st.rerun()
 
 def logout():
@@ -42,35 +47,21 @@ st.markdown("""
     html, body, [class*="css"] { font-family: 'Pretendard', sans-serif; }
     .stApp { background-color: #0f1117; }
     
-    /* ============================================================ */
-    /* [1] 상단 네비게이션 아이콘 버튼 (반응형 & 투명화) */
-    /* ============================================================ */
-    
-    /* 첫 번째 Row의 1~3번째 컬럼 내 버튼 타겟팅 */
+    /* [1] 상단 네비게이션 아이콘 버튼 */
     div[data-testid="column"]:nth-of-type(-n+3) button {
         background-color: transparent !important;
         border: none !important;
         box-shadow: none !important;
         font-size: 2.0rem !important;  
         padding: 0 !important;
-        margin: 0 auto !important;     /* 가로 중앙 */
+        margin: 0 auto !important;
         height: auto !important;
-        width: 100% !important;        /* 부모 너비 꽉 채움 */
-        min-height: 50px !important;   /* 최소 높이 확보 */
-        color: #94a3b8 !important;
-        
-        /* [핵심 수정] Flexbox로 내용물(이모지) 정중앙 정렬 */
-        display: flex !important;
-        align-items: center !important;     /* 수직 중앙 */
-        justify-content: center !important; /* 수평 중앙 */
         line-height: 1 !important;
-    }
-    
-    /* 내부 텍스트 컨테이너도 중앙 정렬 강제 */
-    div[data-testid="column"]:nth-of-type(-n+3) button > div {
+        color: #94a3b8 !important;
         display: flex !important;
-        align-items: center !important;
         justify-content: center !important;
+        align-items: center !important;
+        width: 100% !important;
     }
     
     div[data-testid="column"]:nth-of-type(-n+3) button:hover {
@@ -80,27 +71,21 @@ st.markdown("""
         transition: transform 0.2s ease;
     }
     
-    /* 컬럼 자체도 내용물 중앙 정렬 */
     div[data-testid="column"]:nth-of-type(-n+3) {
         min-width: 50px !important;
         flex: 1 1 auto !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
     }
 
-    /* ============================================================ */
-    /* [2] 하단 작업 버튼 (박스 스타일 유지) */
-    /* ============================================================ */
-    
+    /* [2] 하단 작업 버튼 */
     div[data-testid="column"]:nth-of-type(n+4) button {
-        height: 55px !important;
+        height: 60px !important;
         border-radius: 10px !important;
         font-weight: 700 !important;
-        font-size: 1.05rem !important;
+        font-size: 1.1rem !important;
         width: 100%;
         margin-top: 0px !important;
         transition: all 0.2s ease;
+        white-space: nowrap;
     }
 
     button[kind="primary"] {
@@ -125,10 +110,7 @@ st.markdown("""
         transform: translateY(-2px);
     }
 
-    /* ============================================================ */
     /* [3] 기타 UI 컴포넌트 */
-    /* ============================================================ */
-    
     .kpi-card { background-color: #1e2330; border: 1px solid #334155; border-radius: 16px; padding: 20px; text-align: center; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
     .kpi-value { font-size: clamp(2.5rem, 5vw, 4rem); font-weight: 800; margin: 0; line-height: 1.2; }
     
@@ -149,14 +131,21 @@ st.markdown("""
     .badge-done { background-color: #4ade80; color: #000; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
     .badge-err { background-color: #ef4444; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-right: 5px;}
     .badge-idea { background-color: #f59e0b; color: black; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; margin-right: 5px;}
+
+    .qna-input-container {
+        background-color: #1e293b;
+        border: 1px solid #334155;
+        border-radius: 12px;
+        padding: 20px;
+        margin-bottom: 20px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. 상단 네비게이션 (레이아웃 조정)
+# 2. 상단 네비게이션
 # ==========================================
-# [수정] 버튼 공간을 약간 늘려서(1) 좁은 화면에서도 겹치지 않게 함
-col_nav1, col_nav2, col_nav3, col_title = st.columns([0.8, 0.8, 0.8, 9.6])
+col_nav1, col_nav2, col_nav3, col_title = st.columns([0.6, 0.6, 0.6, 10.2])
 
 with col_nav1:
     if st.button("🏠", help="메인 대시보드"): navigate_to('dashboard')
@@ -183,9 +172,9 @@ st.write("")
 if st.session_state['page'] == 'qna':
     st.markdown("서비스 이용 중 발생한 **오류**나 **건의사항**을 자유롭게 남겨주세요.")
     
-    # [수정 완료] 불필요한 HTML div 제거하고 순수 레이아웃만 사용 -> 빈칸 문제 해결
     with st.container():
-        # 1행: 분류 | 작성자 | 제목
+        st.markdown('<div class="qna-input-container">', unsafe_allow_html=True)
+        
         c_cat, c_writer, c_title = st.columns([1.5, 1.5, 7])
         with c_cat:
             category = st.selectbox("분류", ["🚨 오류", "💡 건의사항"], label_visibility="collapsed")
@@ -194,10 +183,8 @@ if st.session_state['page'] == 'qna':
         with c_title:
             title_input = st.text_input("제목", placeholder="제목을 입력하세요", label_visibility="collapsed")
         
-        # 2행: 내용 (넓게)
         content_input = st.text_area("내용", placeholder="상세 내용을 입력하세요", height=300, label_visibility="collapsed")
         
-        # 3행: 등록 버튼 (우측 하단)
         _, c_btn = st.columns([8.5, 1.5])
         with c_btn:
             st.write("") 
@@ -212,6 +199,7 @@ if st.session_state['page'] == 'qna':
                         st.error("저장 실패")
                 else:
                     st.warning("모든 항목을 입력해주세요.")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     st.divider()
     st.subheader("📋 등록된 문의사항")
@@ -248,7 +236,7 @@ if st.session_state['page'] == 'qna':
         if not qna_df.empty: render_list(qna_df[qna_df['category']=='건의사항'])
         else: st.info("등록된 건의사항이 없습니다.")
 
-# [PAGE: Admin] 관리자 페이지
+# [PAGE: Admin]
 elif st.session_state['page'] == 'admin':
     if not st.session_state['admin_logged_in']:
         col1, col2, col3 = st.columns([1, 1, 1])
@@ -344,12 +332,10 @@ else:
 
         st.subheader("🛠️ 작업 컨트롤 패널")
         
-        # 체크박스 (버튼과 분리)
         st.markdown('<div style="margin-bottom: 10px;">', unsafe_allow_html=True)
         mask_check = st.checkbox("🔒 개인정보 마스킹 (이름/번호 가리기)", value=True)
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # 버튼 (3개 균등 배치)
         with st.container():
             col_act1, col_act2, col_act3 = st.columns(3, gap="medium")
             
@@ -373,22 +359,27 @@ else:
                             st.download_button("📥 PDF 받기", pdf, "report.pdf", "application/pdf", use_container_width=True)
                         except: st.error("실패")
 
-        with col_act3:
-                    if st.button("🗄️ DB에 저장하기", use_container_width=True, key="btn_db"):
-                        suc, m = database.save_to_db(cleaned_data, filename)
-                        # [수정] 줄바꿈으로 문법 오류 해결
-                        if suc:
-                            st.toast("저장 완료!", icon="✅")
-                        else:
-                            st.error(m)
+            with col_act3:
+                if st.button("🗄️ DB에 저장하기", use_container_width=True, key="btn_db"):
+                    suc, m = database.save_to_db(cleaned_data, filename)
+                    if suc:
+                        st.toast("저장 완료!", icon="✅")
+                    else:
+                        st.error(m)
 
         st.markdown("---")
-        t1, t2, t3 = st.tabs(["📊 인사이트 & 필터", "🗑️ 휴지통 (중복)", "💾 DB 히스토리"])
+        t1, t2, t3 = st.tabs(["📊 인사이트 & 필터", "🗑️ 휴지통 (복구)", "💾 DB 히스토리"])
         
+        # [Tab 1] 필터링 & 템플릿 생성
         with t1:
             if cleaned_data:
                 c_sel1, c_sel2 = st.columns([1, 4])
                 with c_sel1: sh = st.selectbox("분석 시트", list(cleaned_data.keys()))
+                
+                if st.session_state['current_sheet'] != sh:
+                    st.session_state['current_sheet'] = sh
+                    st.session_state['mail_df'] = None
+                
                 df = cleaned_data[sh]
                 with st.expander("🔍 상세 검색", expanded=False):
                     cols = st.multiselect("필터 컬럼", df.columns)
@@ -397,14 +388,88 @@ else:
                     for c, val in conds.items():
                         if val: view_df = view_df[view_df[c].astype(str).str.contains(val, case=False)]
                 
-                if not view_df.empty:
-                    potential = [c for c in view_df.columns if not any(k in str(c).lower() for k in ['이름','name','이메일','email','phone','전화','비고','check','no'])]
+                # [수정 완료] 이메일 발송 가이드 문구 추가
+                with st.expander("📧 메일/문자 템플릿 & 발송", expanded=False):
+                    st.info(f"사용 가능 변수: {', '.join([f'{{{c}}}' for c in df.columns])}")
+                    default_msg = """[MICE 2025 컨퍼런스] 사전등록 확정 안내
+
+안녕하세요, {이름}님.
+신청해주신 내용으로 등록이 정상적으로 완료되었습니다.
+
+▶ 소속: {소속}
+▶ 연락처: {전화번호}
+
+행사 당일, 등록데스크에서 본 메시지를 보여주시면 명찰을 수령하실 수 있습니다.
+감사합니다."""
+                    
+                    c_tmpl, c_mail = st.columns([1, 1])
+                    
+                    with c_tmpl:
+                        st.write("###### 📝 템플릿 작성")
+                        tmpl = st.text_area("템플릿 내용", default_msg, height=200)
+                        if st.button("템플릿 적용 (표에 추가)", key="apply_tmpl"):
+                            try:
+                                view_df = cleaner.generate_message_column(view_df, tmpl)
+                                st.session_state['mail_df'] = view_df
+                                st.success("생성 완료! (아래 표 확인)")
+                            except Exception as e: st.error(f"생성 실패: {e}")
+                            
+                    display_df = st.session_state['mail_df'] if st.session_state['mail_df'] is not None else view_df
+
+                    with c_mail:
+                        st.write("###### 🚀 이메일 발송 (SMTP)")
+                        smtp_host = st.text_input("SMTP 서버", "smtp.gmail.com")
+                        smtp_port = st.number_input("포트", value=465)
+                        
+                        # [핵심] 사용자가 헷갈리지 않게 안내 문구 추가
+                        st.markdown("##### 📨 계정 설정")
+                        st.caption("💡 **구글(Gmail) 사용자 필독:** 일반 비밀번호가 아닌 **[앱 비밀번호]**를 사용해야 합니다. (보안 설정 > 2단계 인증 > 앱 비밀번호)")
+                        
+                        sender_email = st.text_input("보내는 메일 주소", placeholder="example@gmail.com")
+                        sender_pw = st.text_input("앱 비밀번호 (16자리)", type="password")
+                        
+                        mail_subject = st.text_input("메일 제목", "[MICE 2025] 등록 안내")
+                        
+                        mail_cols = [c for c in display_df.columns if '이메일' in str(c) or 'email' in str(c).lower()]
+                        idx = list(display_df.columns).index(mail_cols[0]) if mail_cols else 0
+                        target_email_col = st.selectbox("받는 사람 이메일 컬럼", display_df.columns, index=idx)
+                        
+                        st.markdown("---")
+                        st.write("###### 🧪 테스트 발송")
+                        test_receiver = st.text_input("테스트 받는 사람 이메일", placeholder="me@example.com")
+                        
+                        if st.button("테스트 발송 (1건만)", key="test_mail_btn"):
+                            if not test_receiver: st.warning("테스트 이메일을 입력하세요.")
+                            elif '생성된_메시지' not in display_df.columns: st.error("먼저 템플릿을 적용해주세요.")
+                            else:
+                                # [핵심] 인덱스 리셋으로 2.0 에러 방지
+                                test_df = display_df.head(1).copy().reset_index(drop=True)
+                                test_df[target_email_col] = test_receiver
+                                suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(test_df, sender_email, sender_pw, target_email_col, mail_subject, '생성된_메시지', smtp_host, smtp_port)
+                                if suc: st.success(f"테스트 발송 성공! ({test_receiver})")
+                                else: st.error(f"실패: {logs[0]}")
+
+                        st.markdown("---")
+                        if st.button("전체 발송 시작 (주의)", type="primary", key="send_mail_real"):
+                            if '생성된_메시지' not in display_df.columns:
+                                st.error("먼저 '템플릿 적용' 버튼을 눌러 메시지를 생성해주세요.")
+                            elif not sender_email or not sender_pw:
+                                st.error("이메일 계정 정보를 입력해주세요.")
+                            else:
+                                # [핵심] 인덱스 리셋
+                                send_df = display_df.reset_index(drop=True)
+                                suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(send_df, sender_email, sender_pw, target_email_col, mail_subject, '생성된_메시지', smtp_host, smtp_port)
+                                if suc: st.success(f"발송 완료! (성공: {s_cnt}, 실패: {f_cnt})")
+                                else: st.error(f"발송 실패: {logs[0]}")
+
+                if not display_df.empty:
+                    potential = [c for c in display_df.columns if not any(k in str(c).lower() for k in ['이름','name','이메일','email','phone','전화','비고','check','no','메시지'])]
                     if potential:
                         st.markdown(f"##### 📈 **{sh}** 시각화")
                         cols_ui = st.columns(2)
                         for i, col_name in enumerate(potential):
                             with cols_ui[i%2]:
-                                c_data = view_df[col_name].fillna('미입력').value_counts().reset_index()
+                                c_data = display_df[col_name].fillna('미입력').value_counts().reset_index()
                                 c_data.columns = [col_name, 'Count']
                                 if len(c_data) <= 5:
                                     fig = px.pie(c_data, values='Count', names=col_name, title=f"{col_name} 비율", hole=0.3, template="plotly_dark")
@@ -416,10 +481,11 @@ else:
                                 fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)", height=400)
                                 st.plotly_chart(fig, use_container_width=True)
                     st.markdown("#### 📋 상세 데이터")
-                    st.dataframe(view_df, use_container_width=True, hide_index=True, height=500)
+                    st.dataframe(display_df, use_container_width=True, hide_index=True, height=500)
                 else: st.warning("데이터 없음")
             else: st.info("데이터 없음")
 
+        # [Tab 2] 휴지통 (복구)
         with t2:
             if trash_data:
                 full_trash = pd.concat(trash_data)
@@ -427,7 +493,28 @@ else:
                 sel = st.selectbox("확인할 시트", sheets)
                 subset = full_trash[full_trash['[원본시트]']==sel].dropna(axis=1, how='all')
                 st.warning(f"🚨 {len(subset)}건 중복 제거됨")
-                st.dataframe(subset, use_container_width=True, hide_index=True)
+                
+                restore_df = subset.copy()
+                restore_df.insert(0, "선택", False)
+                edited_trash = st.data_editor(restore_df, hide_index=True, use_container_width=True, column_config={"선택": st.column_config.CheckboxColumn(required=True)})
+                
+                if st.button("♻️ 선택 항목 복구", type="primary", key="restore_btn"):
+                    to_restore = edited_trash[edited_trash['선택']==True]
+                    if not to_restore.empty:
+                        rows = to_restore.drop(columns=['선택'])
+                        if '[원본시트]' in rows.columns: rows = rows.drop(columns=['[원본시트]'])
+                        cur = st.session_state['analyzed_data']['cleaned_data'][sel]
+                        st.session_state['analyzed_data']['cleaned_data'][sel] = pd.concat([cur, rows], ignore_index=True)
+                        
+                        rem = edited_trash[edited_trash['선택']==False].drop(columns=['선택'])
+                        oth = full_trash[full_trash['[원본시트]']!=sel]
+                        new_trash = []
+                        if not rem.empty: new_trash.append(rem)
+                        if not oth.empty: new_trash.append(oth)
+                        st.session_state['analyzed_data']['trash_data'] = new_trash
+                        
+                        st.toast("복구 완료!", icon="✅"); time.sleep(0.5); st.rerun()
+                    else: st.warning("항목 선택 필요")
             else: st.success("중복 없음")
 
         with t3:
