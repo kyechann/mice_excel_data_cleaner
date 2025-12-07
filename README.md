@@ -49,7 +49,7 @@
     </tr>
     <tr>
       <td align="center"><i>변수({이름})를 활용한 템플릿 작성 및 대량 발송</i></td>
-      <td align="center"><i>개인화된 내용으로 발송된 메일 확인</i></td>
+      <td align="center"><i>개인화된 내용으로 발송된 메일 확인(테스트)</i></td>
     </tr>
   </tbody>
 </table>
