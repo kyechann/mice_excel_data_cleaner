@@ -30,10 +30,29 @@
 | *직관적인 KPI 카드와 실시간 반응형 차트* | *매핑 규칙 관리 및 사용자 문의 답변* |
 
 ### 📧 이메일 자동 발송 기능
-| 템플릿 작성 및 발송 | 실제 수신 화면 |
-| :---: | :---: |
-| ![Email Sending](assets/email_sending.png) | ![Email Received](assets/email_received.png) |
-| *변수(`{이름}`)를 활용한 템플릿 작성 및 대량 발송* | *개인화된 내용으로 발송된 메일 확인* |
+
+<table>
+  <thead>
+    <tr>
+      <th width="50%" style="text-align:center">템플릿 작성 및 발송</th>
+      <th width="50%" style="text-align:center">실제 수신 화면</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td align="center">
+        <img src="assets/email_sending.png" width="100%" alt="Email Sending">
+      </td>
+      <td align="center">
+        <img src="assets/email_received.png" width="100%" alt="Email Received">
+      </td>
+    </tr>
+    <tr>
+      <td align="center"><i>변수({이름})를 활용한 템플릿 작성 및 대량 발송</i></td>
+      <td align="center"><i>개인화된 내용으로 발송된 메일 확인</i></td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 
