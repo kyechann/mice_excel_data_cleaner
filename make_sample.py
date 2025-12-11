@@ -14,8 +14,8 @@ fake_en = Faker('en_US')
 # ==========================================
 
 def get_random_job(is_foreigner):
-    jobs_kr = ["사원", "주임", "대리", "과장", "차장", "부장", "팀장", "실장", "본부장", "이사", "상무", "전무", "대표이사", "연구원", "선임연구원"]
-    jobs_en = ["Staff", "Associate", "Manager", "Senior Manager", "Director", "VP", "SVP", "CEO", "CTO", "CFO", "Developer", "Designer"]
+    jobs_kr = ["사원", "주임", "대리", "과장", "차장", "부장", "팀장", "실장", "본부장", "이사", "상무", "전무", "대표이사", "연구원"]
+    jobs_en = ["Staff", "Associate", "Manager", "Senior Manager", "Director", "VP", "SVP", "CEO", "CTO", "CFO"]
     return random.choice(jobs_en) if is_foreigner else random.choice(jobs_kr)
 
 def get_random_age_group():
@@ -31,12 +31,8 @@ def get_random_location(is_foreigner):
         region = fake_en.city()
     else:
         country = "대한민국"
-        regions_capital = ["서울", "경기", "인천"]
-        regions_others = ["부산", "대구", "광주", "대전", "울산", "세종", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"]
-        if random.random() < 0.6:
-            region = random.choice(regions_capital)
-        else:
-            region = random.choice(regions_others)
+        regions = ["서울", "경기", "인천", "부산", "대구", "광주", "대전", "울산", "세종", "강원", "충북", "충남", "전북", "전남", "경북", "경남", "제주"]
+        region = random.choice(regions)
     return country, region
 
 def make_company_email(name, company_name):
@@ -73,34 +69,60 @@ def create_messy_company(company_name):
     elif case == 5: return company_name.replace(" ", "")
     return company_name
 
+# [신규] 평점 및 리뷰 생성 함수
+def get_rating_and_review():
+    # 0~10점 생성 (가중치를 두어 7~10점이 많이 나오게 설정)
+    rating = random.choices(range(11), weights=[1,1,2,2,3,5,8,15,20,25,18])[0]
+    
+    reviews_high = [
+        "행사 운영이 매우 매끄러웠습니다.", "유익한 시간이었습니다.", "네트워킹 기회가 좋았어요.", 
+        "내년에도 꼭 참가하고 싶네요.", "도시락이 맛있었습니다.", "강연 내용이 알찼습니다.",
+        "전반적으로 만족스러운 행사였습니다.", "Great event!", "Excellent organization.", "Insightful sessions."
+    ]
+    reviews_mid = [
+        "그럭저럭 괜찮았습니다.", "무난한 행사였습니다.", "일부 세션은 지루했어요.", 
+        "식사가 조금 아쉬웠습니다.", "와이파이가 느렸어요.", "Not bad.", "Average experience.",
+        "사람이 너무 많아서 복잡했어요.", "휴식 공간이 부족했습니다."
+    ]
+    reviews_low = [
+        "최악의 행사였습니다.", "시간 낭비였네요.", "준비가 너무 미흡합니다.", 
+        "안내가 불친절했어요.", "등록 대기 시간이 너무 길었습니다.", "Terrible experience.",
+        "주차 공간이 없어서 불편했습니다.", "다시는 안 옵니다.", "소리가 너무 안 들렸어요."
+    ]
+    
+    if rating >= 9: review = random.choice(reviews_high)
+    elif rating >= 7: review = random.choice(reviews_high + reviews_mid)
+    elif rating >= 4: review = random.choice(reviews_mid)
+    else: review = random.choice(reviews_low)
+    
+    # 20% 확률로 리뷰 안 남김
+    if random.random() < 0.2:
+        review = None
+        
+    return rating, review
+
 def create_large_sample():
     start_time = time.time()
     
-    # 경로 설정
     current_script_path = os.path.dirname(os.path.abspath(__file__))
     parent_path = os.path.dirname(current_script_path)
     data_dir = os.path.join(parent_path, "DATA")
     
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
-        
+    if not os.path.exists(data_dir): os.makedirs(data_dir)
     full_path = os.path.join(data_dir, "참가자_테스트_Sample.xlsx")
 
-    # ==========================================
-    # 목표 수량 설정
-    # ==========================================
-    TARGET_ATTENDEE = 20000  # 참가자 2만명
-    TARGET_BOOTH = 5000      # 부스 5천개
+    TARGET_ATTENDEE = 20000
+    TARGET_BOOTH = 5000
     
-    print(f"🚀 대량 데이터 생성을 시작합니다. (목표: {TARGET_ATTENDEE + TARGET_BOOTH}건)")
-    print("⏳ 생성 중... (약 10~30초 소요됩니다)")
+    print(f"🚀 데이터 생성 시작 (참가자 {TARGET_ATTENDEE} + 부스 {TARGET_BOOTH})...")
+    print("✨ 평점 및 리뷰 데이터 포함")
 
     # ==========================================
-    # 2. 참가자 명단 생성 (20,000명)
+    # 2. 참가자 명단 생성 (컬럼 추가: 평점, 리뷰)
     # ==========================================
     columns_attendee = [
         "이름 (Name)", "소속 (Company)", "직급", "이메일 (E-mail)", "휴대폰 (Phone)", 
-        "성별", "나이대", "국가", "지역", "비고 (테스트 의도)"
+        "성별", "나이대", "국가", "지역", "평점(0-10)", "리뷰(코멘트)", "비고 (테스트 의도)"
     ]
 
     rows_attendee = []
@@ -109,17 +131,15 @@ def create_large_sample():
     famous_companies = {
         '삼성전자': 'Samsung', 'LG전자': 'LGE', '현대자동차': 'Hyundai', 
         'SK텔레콤': 'SKT', '네이버': 'Naver', '카카오': 'Kakao', 
-        '쿠팡': 'Coupang', '배달의민족': 'Woowa', '토스': 'Toss',
-        'Google Korea': 'Google', 'Apple Korea': 'Apple'
+        '쿠팡': 'Coupang', '배달의민족': 'Woowa', '토스': 'Toss'
     }
     company_keys = list(famous_companies.keys())
 
-    # (1) Base 데이터 생성 (약 70%는 정상 데이터)
+    # (1) Base 데이터 생성
     base_count = int(TARGET_ATTENDEE * 0.7)
     
     for _ in range(base_count):
         is_foreigner = random.random() < 0.3
-        
         if is_foreigner:
             name = fake_en.name()
             company = fake_en.company()
@@ -140,41 +160,44 @@ def create_large_sample():
         job = get_random_job(is_foreigner)
         age = get_random_age_group()
         country, region = get_random_location(is_foreigner)
+        
+        # [신규] 평점/리뷰 생성
+        rating, review = get_rating_and_review()
 
-        # Base 리스트에 저장 (나중에 중복 생성용)
-        p_data = [name, company, job, email, phone, gender, age, country, region]
+        p_data = [name, company, job, email, phone, gender, age, country, region, rating, review]
         base_people.append(p_data)
         rows_attendee.append(p_data + ["[랜덤] 정상"])
 
-    # (2) Dirty 데이터 생성 (나머지 30%는 중복/누락/오타)
+    # (2) Dirty 데이터 생성
     dirty_count = TARGET_ATTENDEE - base_count
     
     for _ in range(dirty_count):
         target = random.choice(base_people)
-        name, company, job, email, phone, gender, age, country, region = target
+        # 평점/리뷰는 복제 시 동일하게 가져옴
+        name, company, job, email, phone, gender, age, country, region, rating, review = target
         
         case = random.choice(['dup', 'missing_email', 'missing_phone', 'no_info', 'typo_company', 'typo_name'])
         row_data = []
         note = ""
         
         if case == 'dup':
-            row_data = [name, company, job, email, phone, gender, age, country, region]
+            row_data = [name, company, job, email, phone, gender, age, country, region, rating, review]
             note = "[랜덤] 완전 중복"
         elif case == 'missing_email':
-            row_data = [name, company, job, None, phone, gender, age, country, region]
+            row_data = [name, company, job, None, phone, gender, age, country, region, rating, review]
             note = "[랜덤] 이메일 누락"
         elif case == 'missing_phone':
-            row_data = [name, company, job, email, None, gender, age, country, region]
+            row_data = [name, company, job, email, None, gender, age, country, region, rating, review]
             note = "[랜덤] 전화번호 누락"
         elif case == 'no_info':
-            row_data = [name, company, None, email, phone, gender, age, country, None]
-            note = "[랜덤] 직급/지역 누락"
+            row_data = [name, company, None, email, phone, gender, age, country, None, None, None] # 리뷰도 누락
+            note = "[랜덤] 직급/지역/리뷰 누락"
         elif case == 'typo_company':
-            row_data = [name, create_messy_company(company), job, email, phone, gender, age, country, region]
+            row_data = [name, create_messy_company(company), job, email, phone, gender, age, country, region, rating, review]
             note = "[랜덤] 회사명 변형"
         elif case == 'typo_name':
             messy_name = " ".join(list(name)) if len(name) < 5 else name
-            row_data = [messy_name, company, job, email, phone, gender, age, country, region]
+            row_data = [messy_name, company, job, email, phone, gender, age, country, region, rating, review]
             note = "[랜덤] 이름 공백"
 
         rows_attendee.append(row_data + [note])
@@ -192,10 +215,7 @@ def create_large_sample():
     rows_booth = []
     base_booths = []
     
-    # (1) Base 부스 (70%)
-    base_booth_count = int(TARGET_BOOTH * 0.7)
-    
-    for _ in range(base_booth_count):
+    for _ in range(int(TARGET_BOOTH * 0.7)):
         comp = random.choice(company_keys) if random.random() < 0.3 else fake_en.company()
         rep = fake_en.name()
         job = random.choice(["CEO", "Marketing Director", "Sales Manager", "VP", "Head of Booth"])
@@ -208,10 +228,7 @@ def create_large_sample():
         base_booths.append(b_data)
         rows_booth.append(b_data + ["[랜덤] 정상"])
 
-    # (2) Dirty 부스 (30%)
-    dirty_booth_count = TARGET_BOOTH - base_booth_count
-    
-    for _ in range(dirty_booth_count):
+    for _ in range(TARGET_BOOTH - int(TARGET_BOOTH * 0.7)):
         target = random.choice(base_booths)
         comp, rep, job, phone, email, country, city = target
         case = random.choice(['clean', 'dirty_comp', 'missing_info'])
@@ -228,22 +245,21 @@ def create_large_sample():
     # ==========================================
     # 4. 파일 저장
     # ==========================================
-    print(f"💾 엑셀 파일로 저장 중... (데이터가 많아 시간이 조금 걸립니다)")
-    
+    print(f"💾 엑셀 파일로 저장 중... (약 10~20초)")
     try:
         with pd.ExcelWriter(full_path, engine="openpyxl") as writer:
             df1.to_excel(writer, sheet_name="참가자_명단", index=False)
             df2.to_excel(writer, sheet_name="부스_신청", index=False)
         
-        elapsed_time = time.time() - start_time
-        print(f"✅ '{full_path}' 생성 완료! (소요시간: {elapsed_time:.2f}초)")
-        print(f"   - 참가자_명단: {len(df1)}행")
-        print(f"   - 부스_신청: {len(df2)}행")
+        elapsed = time.time() - start_time
+        print(f"✅ 생성 완료! ({elapsed:.2f}초)")
+        print(f"   - 참가자: {len(df1)}행 (평점/리뷰 포함)")
+        print(f"   - 부스: {len(df2)}행")
         
     except PermissionError:
-        print("\n❌ 파일 저장 실패! 엑셀 파일이 열려있다면 닫고 다시 실행해주세요.")
+        print("\n❌ 파일이 열려있습니다. 엑셀을 닫고 다시 실행해주세요.")
     except Exception as e:
-        print(f"\n❌ 오류 발생: {e}")
+        print(f"\n❌ 오류: {e}")
 
 if __name__ == "__main__":
     create_large_sample()

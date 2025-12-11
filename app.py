@@ -6,7 +6,11 @@ import time
 from modules import cleaner, database, reporter, mailer
 import os
 from dotenv import load_dotenv
-
+try:
+    from wordcloud import WordCloud
+    import matplotlib.pyplot as plt
+except ImportError:
+    pass
 # ==========================================
 # 0. 환경 변수 로드
 # ==========================================
@@ -719,34 +723,27 @@ else:
         # -------------------------------
         # Tab 1: 인사이트 & 필터
         # -------------------------------
+# [Tab 1] 인사이트 & 필터
         with t1:
             if cleaned_data:
-                c_sel1, _ = st.columns([1, 4])
-                with c_sel1:
-                    sh = st.selectbox("분석 시트", list(cleaned_data.keys()))
-
+                c_sel1, c_sel2 = st.columns([1, 4])
+                with c_sel1: sh = st.selectbox("분석 시트", list(cleaned_data.keys()))
+                
                 if st.session_state['current_sheet'] != sh:
                     st.session_state['current_sheet'] = sh
                     st.session_state['mail_df'] = None
-
+                
                 df = cleaned_data[sh]
-
-                # 상세 검색
                 with st.expander("🔍 상세 검색", expanded=False):
                     cols = st.multiselect("필터 컬럼", df.columns)
                     conds = {c: st.text_input(f"'{c}' 검색") for c in cols}
                     view_df = df.copy()
                     for c, val in conds.items():
-                        if val:
-                            view_df = view_df[
-                                view_df[c].astype(str).str.contains(val, case=False)
-                            ]
-                # 메일/문자 템플릿 & 발송
+                        if val: view_df = view_df[view_df[c].astype(str).str.contains(val, case=False)]
+                
+                # 템플릿
                 with st.expander("📧 메일/문자 템플릿 & 발송", expanded=False):
-                    st.info(
-                        "사용 가능 변수: "
-                        + ", ".join([f'{{{c}}}' for c in df.columns])
-                    )
+                    st.info(f"사용 가능 변수: {', '.join([f'{{{c}}}' for c in df.columns])}")
                     default_msg = """[MICE 2025 컨퍼런스] 사전등록 확정 안내
 
 안녕하세요, {이름}님.
@@ -757,98 +754,47 @@ else:
 
 행사 당일, 등록데스크에서 본 메시지를 보여주시면 명찰을 수령하실 수 있습니다.
 감사합니다."""
+                    
                     c_tmpl, c_mail = st.columns([1, 1])
-
                     with c_tmpl:
                         st.write("###### 📝 템플릿 작성")
-                        tmpl = st.text_area(
-                            "템플릿 내용",
-                            default_msg,
-                            height=200
-                        )
+                        tmpl = st.text_area("템플릿 내용", default_msg, height=200)
                         if st.button("템플릿 적용 (표에 추가)", key="apply_tmpl"):
                             try:
-                                view_df = cleaner.generate_message_column(
-                                    view_df, tmpl
-                                )
+                                view_df = cleaner.generate_message_column(view_df, tmpl)
                                 st.session_state['mail_df'] = view_df
                                 st.success("생성 완료! (아래 표 확인)")
-                            except Exception as e:
-                                st.error(f"생성 실패: {e}")
-
-                    display_df = (
-                        st.session_state['mail_df']
-                        if st.session_state['mail_df'] is not None
-                        else view_df
-                    )
+                            except Exception as e: st.error(f"생성 실패: {e}")
+                            
+                    display_df = st.session_state['mail_df'] if st.session_state['mail_df'] is not None else view_df
 
                     with c_mail:
                         st.write("###### 🚀 이메일 발송 (SMTP)")
                         smtp_host = st.text_input("SMTP 서버", "smtp.gmail.com")
                         smtp_port = st.number_input("포트", value=465)
-
                         st.markdown("*보내는 메일 주소 (예: `myname@gmail.com`)*")
-                        sender_email = st.text_input(
-                            "보내는 메일",
-                            label_visibility="collapsed"
-                        )
-
+                        sender_email = st.text_input("보내는 메일", label_visibility="collapsed")
                         st.markdown("*앱 비밀번호 (일반 비밀번호 아님!)*")
-                        sender_pw = st.text_input(
-                            "앱 비밀번호",
-                            type="password",
-                            label_visibility="collapsed"
-                        )
-
-                        mail_subject = st.text_input(
-                            "메일 제목",
-                            "[MICE 2025] 등록 안내"
-                        )
-
-                        mail_cols = [
-                            c for c in display_df.columns
-                            if '이메일' in str(c)
-                            or 'email' in str(c).lower()
-                        ]
-                        idx = (
-                            list(display_df.columns).index(mail_cols[0])
-                            if mail_cols else 0
-                        )
-                        target_email_col = st.selectbox(
-                            "받는 사람 이메일 컬럼",
-                            display_df.columns,
-                            index=idx
-                        )
-
+                        sender_pw = st.text_input("앱 비밀번호", type="password", label_visibility="collapsed")
+                        mail_subject = st.text_input("메일 제목", "[MICE 2025] 등록 안내")
+                        
+                        mail_cols = [c for c in display_df.columns if '이메일' in str(c) or 'email' in str(c).lower()]
+                        idx = list(display_df.columns).index(mail_cols[0]) if mail_cols else 0
+                        target_email_col = st.selectbox("받는 사람 이메일 컬럼", display_df.columns, index=idx)
+                        
                         st.markdown("---")
                         st.write("###### 🧪 테스트 발송")
-                        test_receiver = st.text_input(
-                            "테스트 받는 사람 이메일",
-                            placeholder="me@example.com"
-                        )
-
+                        test_receiver = st.text_input("테스트 받는 사람 이메일", placeholder="me@example.com")
+                        
                         if st.button("테스트 발송 (1건만)", key="test_mail_btn"):
-                            if not test_receiver:
-                                st.warning("테스트 이메일을 입력하세요.")
-                            elif '생성된_메시지' not in display_df.columns:
-                                st.error("먼저 템플릿을 적용해주세요.")
+                            if not test_receiver: st.warning("테스트 이메일을 입력하세요.")
+                            elif '생성된_메시지' not in display_df.columns: st.error("먼저 템플릿을 적용해주세요.")
                             else:
                                 test_df = display_df.head(1).copy().reset_index(drop=True)
                                 test_df[target_email_col] = test_receiver
-                                suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(
-                                    test_df,
-                                    sender_email,
-                                    sender_pw,
-                                    target_email_col,
-                                    mail_subject,
-                                    '생성된_메시지',
-                                    smtp_host,
-                                    smtp_port
-                                )
-                                if suc:
-                                    st.success(f"테스트 발송 성공! ({test_receiver})")
-                                else:
-                                    st.error(f"실패: {logs[0]}")
+                                suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(test_df, sender_email, sender_pw, target_email_col, mail_subject, '생성된_메시지', smtp_host, smtp_port)
+                                if suc: st.success(f"테스트 발송 성공! ({test_receiver})")
+                                else: st.error(f"실패: {logs[0]}")
 
                         st.markdown("---")
                         if st.button("전체 발송 시작 (주의)", type="primary", key="send_mail_real"):
@@ -858,37 +804,231 @@ else:
                                 st.error("이메일 계정 정보를 입력해주세요.")
                             else:
                                 send_df = display_df.reset_index(drop=True)
-                                suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(
-                                    send_df,
-                                    sender_email,
-                                    sender_pw,
-                                    target_email_col,
-                                    mail_subject,
-                                    '생성된_메시지',
-                                    smtp_host,
-                                    smtp_port
-                                )
-                                if suc:
-                                    st.success(f"발송 완료! (성공: {s_cnt}, 실패: {f_cnt})")
-                                else:
-                                    st.error(f"발송 실패: {logs[0]}")
+                                suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(send_df, sender_email, sender_pw, target_email_col, mail_subject, '생성된_메시지', smtp_host, smtp_port)
+                                if suc: st.success(f"발송 완료! (성공: {s_cnt}, 실패: {f_cnt})")
+                                else: st.error(f"발송 실패: {logs[0]}")
 
-                # 시각화 & 데이터 테이블
+                # [NEW] 만족도/리뷰 분석 섹션
+                st.markdown("---")
+                st.subheader("📊 만족도 및 리뷰 분석")
+                
+# --------------------------------------------------------
+                # [수정] 만족도(평점) 및 리뷰(텍스트) 분석 통합 섹션
+                # --------------------------------------------------------
+                
+                # 컬럼 감지
+                rating_cols = [c for c in display_df.columns if any(k in str(c).lower() for k in ['평점', 'rating', 'score', '점수'])]
+                review_cols = [c for c in display_df.columns if any(k in str(c).lower() for k in ['리뷰', 'review', 'comment', '의견', '코멘트'])]
+
+                # 1. 평점 분포 & NPS 분석
+                if rating_cols:
+                    st.markdown("---")
+                    st.subheader("📊 만족도 분석")
+                    rating_col = rating_cols[0]
+                    
+                    # NPS 및 통계 계산
+                    try:
+                        scores = pd.to_numeric(display_df[rating_col], errors='coerce').dropna()
+                        if not scores.empty:
+                            promoters = len(scores[scores >= 9])
+                            neutrals = len(scores[(scores >= 7) & (scores <= 8)])
+                            detractors = len(scores[scores <= 6])
+                            total_res = len(scores)
+                            nps = ((promoters - detractors) / total_res) * 100
+                            
+                            # KPI 카드 3개 배치 (그래프 위)
+                            m1, m2, m3 = st.columns(3)
+                            
+                            with m1:
+                                st.markdown(f"""
+                                <div class="kpi-card" style="padding: 15px;">
+                                    <div class="kpi-title">😊 긍정 고객 (9-10점)</div>
+                                    <div class="kpi-value val-clean" style="font-size: 2.5rem;">{promoters:,}명</div>
+                                    <div class="kpi-delta">{promoters/total_res*100:.1f}%</div>
+                                </div>""", unsafe_allow_html=True)
+                            
+                            with m2:
+                                st.markdown(f"""
+                                <div class="kpi-card" style="padding: 15px;">
+                                    <div class="kpi-title">😐 중립 고객 (7-8점)</div>
+                                    <div class="kpi-value" style="font-size: 2.5rem; color: #cbd5e1;">{neutrals:,}명</div>
+                                    <div class="kpi-delta" style="color: #64748b;">{neutrals/total_res*100:.1f}%</div>
+                                </div>""", unsafe_allow_html=True)
+
+                            with m3:
+                                st.markdown(f"""
+                                <div class="kpi-card" style="padding: 15px;">
+                                    <div class="kpi-title">😡 부정 고객 (0-6점)</div>
+                                    <div class="kpi-value val-trash" style="font-size: 2.5rem;">{detractors:,}명</div>
+                                    <div class="kpi-delta">NPS: {nps:.1f}</div>
+                                </div>""", unsafe_allow_html=True)
+                            
+                            st.write("") # 간격
+                    except Exception as e:
+                        st.warning(f"점수 계산 중 오류: {e}")
+
+                    # 히스토그램 (그래프 아래 배치)
+                    fig_hist = px.histogram(
+                        display_df, x=rating_col, nbins=11, 
+                        title=f"📈 {rating_col} 분포 (0~10점)", 
+                        template="plotly_dark", 
+                        color_discrete_sequence=['#6366f1']
+                    )
+                    fig_hist.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)", 
+                        plot_bgcolor="rgba(0,0,0,0)", 
+                        xaxis_title="평점", 
+                        yaxis_title="인원 수",
+                        bargap=0.1
+                    )
+                    st.plotly_chart(fig_hist, use_container_width=True)
+
+                # 2. 리뷰 텍스트 분석 (워드클라우드 + 빈도수)
+                if review_cols:
+                    review_col = review_cols[0]
+                    st.markdown("---")
+                    st.subheader(f"🗣️ '{review_col}' 키워드 분석")
+                    
+                    text_list = display_df[review_col].dropna().astype(str).tolist()
+                    full_text = " ".join(text_list)
+                    
+                    wc_col, bar_col = st.columns(2)
+                    
+                    # [Left] 워드 클라우드
+                    with wc_col:
+                        st.write("###### ☁️ 워드 클라우드")
+                        try:
+                            from wordcloud import WordCloud
+                            import matplotlib.pyplot as plt
+                            
+                            font_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts', 'NanumGothic.ttf')
+                            
+                            if os.path.exists(font_path) and full_text.strip():
+                                wc = WordCloud(font_path=font_path, width=600, height=400, background_color='#0f1117', colormap='cool').generate(full_text)
+                                fig, ax = plt.subplots(figsize=(8, 5))
+                                ax.imshow(wc, interpolation='bilinear'); ax.axis('off'); fig.patch.set_facecolor('#0f1117')
+                                st.pyplot(fig)
+                            else:
+                                st.warning("텍스트가 없거나 폰트 파일이 없습니다.")
+                        except: pass
+
+                    # [Right] 빈도수 막대 그래프
+# [Right] 감성별(평점별) 키워드 분석 (업그레이드: 불용어 제거)
+                    with bar_col:
+                        st.write("###### 🧠 평점별 핵심 키워드 (불용어 제거)")
+                        
+                        if rating_cols:
+                            target_rating_col = rating_cols[0]
+                            
+                            try:
+                                try:
+                                    from kiwipiepy import Kiwi
+                                    kiwi = Kiwi()
+                                    has_kiwi = True
+                                except: has_kiwi = False
+                                
+                                from collections import Counter
+
+                                # [핵심] 분석에서 제외할 단어 리스트 (불용어)
+                                # 여기에 의미 없는 단어들을 추가하면 분석이 더 정교해집니다.
+                                STOPWORDS = {
+                                    '행사', '참가', '진짜', '정말', '너무', '매우', '역시', '부분', '관련', '내용', 
+                                    '시간', '사람', '생각', '정도', '참석', '진행', '운영', '전반', '개최', 
+                                    'great', 'good', 'event', 'session', 'conference', 'meeting'
+                                }
+
+                                def get_sentiment(score):
+                                    try:
+                                        s = float(score)
+                                        if s >= 9: return "1. 긍정(9-10점)"
+                                        elif s >= 7: return "2. 중립(7-8점)"
+                                        else: return "3. 부정(0-6점)"
+                                    except: return "4. 기타"
+
+                                sent_df = display_df[[target_rating_col, review_col]].dropna()
+                                sent_df['Sentiment'] = sent_df[target_rating_col].apply(get_sentiment)
+                                
+                                all_keywords = []
+                                
+                                for sentiment in ['1. 긍정(9-10점)', '2. 중립(7-8점)', '3. 부정(0-6점)']:
+                                    texts = sent_df[sent_df['Sentiment'] == sentiment][review_col].astype(str).tolist()
+                                    full_text = " ".join(texts)
+                                    if not full_text: continue
+
+                                    words = []
+                                    if has_kiwi:
+                                        tokens = kiwi.tokenize(full_text)
+                                        # 명사(NNG, NNP)이면서, 2글자 이상이고, 불용어가 아닌 것만 추출
+                                        words = [t.form for t in tokens if t.tag in ['NNG', 'NNP', 'SL'] and len(t.form) > 1 and t.form.lower() not in STOPWORDS]
+                                    else:
+                                        # 라이브러리 없을 때: 띄어쓰기 기준 + 특수문자 제거
+                                        raw_words = full_text.split()
+                                        for w in raw_words:
+                                            # 특수문자 제거 (한글/영어만 남김)
+                                            clean_w = re.sub(r'[^\w]', '', w)
+                                            if len(clean_w) > 1 and clean_w.lower() not in STOPWORDS:
+                                                words.append(clean_w)
+                                    
+                                    # 상위 15개 추출 (키워드 다양성 확보)
+                                    if words:
+                                        common = Counter(words).most_common(15)
+                                        for word, count in common:
+                                            all_keywords.append({'Sentiment': sentiment, 'Word': word, 'Count': count})
+                                
+                                if all_keywords:
+                                    df_treemap = pd.DataFrame(all_keywords)
+                                    
+                                    # 트리맵 시각화
+                                    fig_tree = px.treemap(
+                                        df_treemap, 
+                                        path=['Sentiment', 'Word'], 
+                                        values='Count',
+                                        color='Sentiment',
+                                        color_discrete_map={
+                                            '1. 긍정(9-10점)': '#6366f1',
+                                            '2. 중립(7-8점)': '#94a3b8',
+                                            '3. 부정(0-6점)': '#ef4444'
+                                        }
+                                    )
+                                    fig_tree.update_layout(
+                                        paper_bgcolor="rgba(0,0,0,0)",
+                                        plot_bgcolor="rgba(0,0,0,0)",
+                                        font=dict(family="Pretendard", size=14),
+                                        margin=dict(t=20, l=0, r=0, b=0)
+                                    )
+                                    # 텍스트가 잘 보이도록 설정
+                                    fig_tree.data[0].textinfo = "label+value"
+                                    st.plotly_chart(fig_tree, use_container_width=True)
+                                else:
+                                    st.info("유의미한 키워드를 찾지 못했습니다.")
+                            except Exception as e:
+                                st.error(f"분석 중 오류: {e}")
+                        else:
+                            st.info("평점 데이터가 없어 전체 빈도수로 대체합니다.")
+                            # (Fallback 로직 생략 - 위와 동일)
+                # 3. 상세 데이터 테이블 (들여쓰기 수정됨: 항상 보이도록 밖으로 뺌)
+                # 3. 주요 인사이트 대시보드 (최대 6개)
+                st.markdown("---")
+                st.markdown("#### 📊 인사이트 대시보드")
+
                 if not display_df.empty:
+                    # 시각화에 사용할 후보 컬럼 자동 선택
+                    excluded_keywords = [
+                        '이름', 'name', '이메일', 'email', 'phone',
+                        '전화', '비고', 'check', 'no', '메시지',
+                        '리뷰', 'review', 'comment', '의견', '코멘트',
+                        '평점', 'rating', 'score', '점수'
+                    ]
                     potential = [
                         c for c in display_df.columns
-                        if not any(
-                            k in str(c).lower()
-                            for k in [
-                                '이름', 'name', '이메일', 'email', 'phone',
-                                '전화', '비고', 'check', 'no', '메시지'
-                            ]
-                        )
+                        if not any(k in str(c).lower() for k in excluded_keywords)
                     ]
+
                     if potential:
-                        st.markdown(f"##### 📈 **{sh}** 시각화")
+                        # 최대 6개 컬럼까지만 대시보드 생성
+                        st.markdown(f"##### 📈 **{sh}** 주요 대시보드")
                         cols_ui = st.columns(2)
-                        for i, col_name in enumerate(potential):
+                        for i, col_name in enumerate(potential[:6]):
                             with cols_ui[i % 2]:
                                 c_data = (
                                     display_df[col_name]
@@ -897,6 +1037,8 @@ else:
                                     .reset_index()
                                 )
                                 c_data.columns = [col_name, 'Count']
+
+                                # 항목 수에 따라 파이 / 바 차트 선택
                                 if len(c_data) <= 5:
                                     fig = px.pie(
                                         c_data,
@@ -928,7 +1070,11 @@ else:
                                     height=400
                                 )
                                 st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("대시보드를 만들 수 있는 적절한 컬럼이 없습니다.")
 
+                    # 4. 상세 데이터 테이블
+                    st.markdown("---")
                     st.markdown("#### 📋 상세 데이터")
                     st.dataframe(
                         display_df,
@@ -938,8 +1084,8 @@ else:
                     )
                 else:
                     st.warning("데이터 없음")
-            else:
-                st.info("데이터 없음")
+            
+            
 
         # -------------------------------
         # Tab 2: 휴지통 (복구)
