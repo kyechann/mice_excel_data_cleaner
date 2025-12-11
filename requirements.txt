@@ -8,3 +8,6 @@ plotly
 fpdf2
 python-calamine
 python-dotenv
+wordcloud
+matplotlib
+kiwipiepy

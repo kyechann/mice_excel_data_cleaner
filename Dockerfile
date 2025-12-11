@@ -1,14 +1,24 @@
 # 1. 파이썬 3.12 슬림 버전 사용 (가볍고 빠름)
-FROM python:3.12-slim
+FROM python:3.11-slim
 
 # 2. 작업 폴더 설정
 WORKDIR /app
 
-# 3. 필수 라이브러리 설치를 위해 파일 복사
+# (Debian/슬림 계열 기준 예시)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    cmake \
+    libpng-dev \
+    libjpeg-dev \
+    zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2. 파이썬 패키지 설치
 COPY requirements.txt .
 
-# 4. 라이브러리 설치
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel Cython setuptools-scm \
+    && pip install --no-cache-dir numpy \
+    && pip install --no-cache-dir --no-build-isolation -r requirements.txt
 
 # 5. 소스 코드 복사
 COPY . .
