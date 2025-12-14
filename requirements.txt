@@ -11,3 +11,5 @@ python-dotenv
 wordcloud
 matplotlib
 kiwipiepy
+kaleido
+reportlab
