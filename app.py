@@ -16,12 +16,101 @@ except ImportError:
     WordCloud = None
     plt = None
 
+
 # ==========================================
 # 0. 환경 변수 로드
 # ==========================================
 load_dotenv()
 ADMIN_ID = os.getenv("ADMIN_ID", "admin")
 ADMIN_PW = os.getenv("ADMIN_PW", "1234")
+
+# ==========================================
+# [DB 저장 전용] 고정 규격(컬럼) + alias 매핑
+# ==========================================
+DB_SCHEMA_COLS = ["이름", "소속", "직함", "전화번호", "이메일", "참가구분", "등록일", "평점", "리뷰", "비고"]
+
+DB_COL_ALIASES = {
+    "이름": ["이름", "성명", "name", "full name", "이름(name)", "이름 (name)", "이름 (Name)", "이름(Name)"],
+    "소속": ["소속", "회사", "기관", "부서", "company", "organization", "organisation",
+           "소속(company)", "소속 (company)", "소속 (Company)", "소속(Company)"],
+    "직함": ["직함", "직급", "직책", "job", "job title", "position", "title", "role"],
+    "전화번호": ["전화번호", "휴대폰", "연락처", "phone", "mobile", "tel", "contact", "contact no", "contact no.",
+             "휴대폰 (Phone)", "휴대폰(Phone)", "Contact No.", "Contact No", "Contact"],
+    "이메일": ["이메일", "e-mail", "email", "email address", "mail",
+            "이메일 (E-mail)", "이메일(E-mail)", "Email Address", "Email"],
+    "참가구분": ["참가구분", "구분", "참가 유형", "참가유형", "type", "attendee type", "category", "registration type"],
+    "등록일": ["등록일", "신청일", "접수일", "date", "registration date", "registered at", "created at", "created_at"],
+
+    "평점": ["평점", "rating", "score", "점수", "평점(0-10)", "평점(0~10)", "nps", "satisfaction", "만족도"],
+    "리뷰": ["리뷰", "review", "comment", "comments", "의견", "코멘트", "후기", "리뷰(코멘트)", "만족도_리뷰"],
+    "비고": ["비고", "메모", "note", "notes", "remark", "remarks", "etc", "기타"],
+}
+
+
+def _norm_col(x: str) -> str:
+    """컬럼명 비교를 위해 정규화: 소문자/공백제거/괄호 등 제거"""
+    if x is None:
+        return ""
+    s = str(x).strip().lower()
+    s = re.sub(r"\s+", "", s)
+    s = re.sub(r"[()\[\]{}<>]", "", s)
+    s = s.replace(".", "").replace("-", "").replace("_", "")
+    return s
+
+
+def _build_alias_lookup():
+    lookup = {}
+    for canonical, aliases in DB_COL_ALIASES.items():
+        for a in aliases:
+            lookup[_norm_col(a)] = canonical
+    for c in DB_SCHEMA_COLS:
+        lookup[_norm_col(c)] = c
+    return lookup
+
+
+_ALIAS_LOOKUP = _build_alias_lookup()
+
+
+def project_df_to_db_schema(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    df를 DB_SCHEMA_COLS로 투영:
+    - alias 매핑으로 컬럼명 정규화
+    - 없는 컬럼은 None 생성
+    - 나머지 컬럼은 버림(=DB에 저장 안 함)
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=DB_SCHEMA_COLS)
+
+    rename_map = {}
+    for col in df.columns:
+        key = _norm_col(col)
+        if key in _ALIAS_LOOKUP:
+            canonical = _ALIAS_LOOKUP[key]
+            if canonical not in rename_map.values():
+                rename_map[col] = canonical
+
+    df2 = df.rename(columns=rename_map).copy()
+
+    out = pd.DataFrame()
+    for c in DB_SCHEMA_COLS:
+        out[c] = df2[c] if c in df2.columns else None
+
+    out["전화번호"] = out["전화번호"].astype(str).str.strip().replace({"nan": None, "None": None})
+    out["이메일"] = out["이메일"].astype(str).str.strip().str.lower().replace({"nan": None, "none": None})
+    out["등록일"] = out["등록일"].astype(str).str.strip().replace({"nan": None, "None": None})
+
+    out["평점"] = pd.to_numeric(out["평점"], errors="coerce")
+    out["리뷰"] = out["리뷰"].astype(str).str.strip().replace({"nan": None, "None": None, "none": None})
+
+    return out
+
+
+def build_db_payload(cleaned_data: dict) -> dict:
+    payload = {}
+    for sheet_name, df in cleaned_data.items():
+        payload[sheet_name] = project_df_to_db_schema(df)
+    return payload
+
 
 # ==========================================
 # 1. 페이지 설정 및 세션 상태
@@ -44,7 +133,6 @@ if 'mail_df' not in st.session_state:
 if 'current_sheet' not in st.session_state:
     st.session_state['current_sheet'] = None
 
-# ✅✅✅ [추가] 화면에 그려진 그래프/표를 PDF에도 그대로 넣기 위한 버퍼
 if "pdf_assets" not in st.session_state:
     st.session_state["pdf_assets"] = []
 if "pdf_bytes" not in st.session_state:
@@ -60,7 +148,6 @@ def reset_analysis():
     st.session_state['analyzed_data'] = None
     st.session_state['mail_df'] = None
     st.session_state['current_sheet'] = None
-    # ✅✅✅ [추가] PDF 버퍼도 리셋
     st.session_state["pdf_assets"] = []
     st.session_state["pdf_bytes"] = None
     st.rerun()
@@ -73,23 +160,22 @@ def logout():
 
 
 # ==========================================
-# ✅✅✅ [추가] "대시보드에 그려진 것"을 PDF에도 그대로 넣기 위한 헬퍼
+# PDF assets helpers
 # ==========================================
 def pdf_assets_reset():
     st.session_state["pdf_assets"] = []
 
+
 def pdf_add_plotly(fig, title: str):
-    """Plotly figure -> PNG bytes -> assets 추가 (대시보드에는 그대로 plotly_chart로 표시)"""
     try:
         png = reporter.plotly_to_png_bytes(fig)  # kaleido 필요
         if png:
             st.session_state["pdf_assets"].append(("img", title, png))
     except Exception:
-        # PDF에는 못 넣더라도 대시보드 표시가 우선이니 조용히 실패 처리
         pass
 
+
 def pdf_add_mpl(fig, title: str):
-    """Matplotlib figure -> PNG bytes -> assets 추가"""
     try:
         png = reporter.mpl_to_png_bytes(fig)
         if png:
@@ -97,8 +183,8 @@ def pdf_add_mpl(fig, title: str):
     except Exception:
         pass
 
+
 def pdf_add_table(df: pd.DataFrame, title: str, head: int = 80):
-    """표는 너무 커질 수 있어서 기본 head(80)만 PDF에 넣음(대시보드 표는 그대로)"""
     try:
         if df is not None and not df.empty:
             st.session_state["pdf_assets"].append(("table", title, df.head(head)))
@@ -107,7 +193,96 @@ def pdf_add_table(df: pd.DataFrame, title: str, head: int = 80):
 
 
 # ==========================================
-# 2. 글로벌 스타일 (CSS)  (원본 그대로)
+# 등록일 분석 차트 (key 추가로 DuplicateElementId 방지)
+# ==========================================
+def render_registration_charts(display_df: pd.DataFrame, sheet_name: str = ""):
+    date_col = None
+    for c in display_df.columns:
+        if str(c) == "등록일":
+            date_col = c
+            break
+    if date_col is None:
+        for c in display_df.columns:
+            low = str(c).lower()
+            if any(k in low for k in ["등록일", "신청일", "접수일", "date", "created", "registered"]):
+                date_col = c
+                break
+    if date_col is None:
+        return
+
+    tmp = display_df.copy()
+    tmp[date_col] = pd.to_datetime(tmp[date_col], errors="coerce")
+    tmp = tmp.dropna(subset=[date_col])
+    if tmp.empty:
+        return
+
+    st.markdown("---")
+    st.subheader("📅 등록일 분석")
+
+    daily = tmp.groupby(tmp[date_col].dt.date).size().reset_index(name="Count")
+    daily.columns = ["등록일", "Count"]
+    daily["등록일"] = pd.to_datetime(daily["등록일"])
+
+    if len(daily) > 120:
+        weekly = daily.set_index("등록일").resample("W-MON")["Count"].sum().reset_index()
+        fig_trend = px.line(
+            weekly, x="등록일", y="Count", markers=True,
+            title="📈 등록 추이 (주별)", template="plotly_dark"
+        )
+    else:
+        fig_trend = px.line(
+            daily, x="등록일", y="Count", markers=True,
+            title="📈 등록 추이 (일별)", template="plotly_dark"
+        )
+
+    fig_trend.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig_trend, use_container_width=True, key=f"reg_trend_{sheet_name}")
+    pdf_add_plotly(fig_trend, f"{sheet_name} - 등록 추이")
+
+    daily_sorted = daily.sort_values("등록일").copy()
+    daily_sorted["Cumulative"] = daily_sorted["Count"].cumsum()
+    fig_cum = px.area(daily_sorted, x="등록일", y="Cumulative", title="📈 누적 등록 수", template="plotly_dark")
+    fig_cum.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig_cum, use_container_width=True, key=f"reg_cum_{sheet_name}")
+    pdf_add_plotly(fig_cum, f"{sheet_name} - 누적 등록")
+
+    type_col = "참가구분" if "참가구분" in tmp.columns else None
+    if type_col:
+        tmp3 = tmp.copy()
+        tmp3["등록월"] = tmp3[date_col].dt.to_period("M").astype(str)
+        g = tmp3.groupby(["등록월", type_col]).size().reset_index(name="Count")
+        fig_stack = px.bar(g, x="등록월", y="Count", color=type_col, title="📊 참가구분별 등록 (월별)", template="plotly_dark")
+        fig_stack.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            xaxis_tickangle=-45
+        )
+        st.plotly_chart(fig_stack, use_container_width=True, key=f"reg_stack_{sheet_name}")
+        pdf_add_plotly(fig_stack, f"{sheet_name} - 참가구분별 월별 등록")
+
+    tmp2 = tmp.copy()
+    tmp2["등록월"] = tmp2[date_col].dt.to_period("M").astype(str)
+    tmp2["요일"] = tmp2[date_col].dt.day_name()
+
+    dow_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    tmp2["요일"] = pd.Categorical(tmp2["요일"], categories=dow_order, ordered=True)
+
+    heat = tmp2.groupby(["요일", "등록월"]).size().reset_index(name="Count")
+    heat_pivot = heat.pivot(index="요일", columns="등록월", values="Count").fillna(0)
+
+    fig_heat = px.imshow(
+        heat_pivot,
+        aspect="auto",
+        title="🗓️ 등록 패턴 히트맵 (월 × 요일)",
+        template="plotly_dark"
+    )
+    fig_heat.update_layout(paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)")
+    st.plotly_chart(fig_heat, use_container_width=True, key=f"reg_heat_{sheet_name}")
+    pdf_add_plotly(fig_heat, f"{sheet_name} - 등록 히트맵(월×요일)")
+
+
+# ==========================================
+# 2. 글로벌 스타일 (CSS)
 # ==========================================
 st.markdown("""
 <style>
@@ -402,15 +577,15 @@ with col_reset:
 
 st.markdown("<div style='height:0px'></div>", unsafe_allow_html=True)
 
+
 # ==========================================
 # 4. 페이지 라우팅
 # ==========================================
 
 # -------------------------------
-# Q&A 페이지 (원본 그대로)
+# Q&A 페이지
 # -------------------------------
 if st.session_state['page'] == 'qna':
-    # (여기부터 Q&A 원본 코드 그대로)
     with st.container():
         st.markdown('<div class="qna-input-container">', unsafe_allow_html=True)
         c_cat, c_writer, c_title = st.columns([1.5, 1.5, 7])
@@ -449,12 +624,12 @@ if st.session_state['page'] == 'qna':
     t_err, t_idea = st.tabs(["🚨 오류 제보", "💡 건의사항"])
     qna_df = database.get_qna_list()
 
-    def render_list(df: pd.DataFrame):
-        if df.empty:
+    def render_list(df_: pd.DataFrame):
+        if df_.empty:
             st.info("등록된 게시글이 없습니다.")
             return
 
-        for _, row in df.iterrows():
+        for _, row in df_.iterrows():
             status_badge = (
                 '<span class="badge-done">답변완료</span>'
                 if row['status'] == '답변완료'
@@ -503,8 +678,9 @@ if st.session_state['page'] == 'qna':
         else:
             st.info("등록된 건의사항이 없습니다.")
 
+
 # -------------------------------
-# Admin 페이지 (원본 그대로)
+# Admin 페이지
 # -------------------------------
 elif st.session_state['page'] == 'admin':
     if not st.session_state['admin_logged_in']:
@@ -531,9 +707,9 @@ elif st.session_state['page'] == 'admin':
 
         with tab_map:
             c_map = cleaner.load_mapping()
-            df = pd.DataFrame(list(c_map.items()), columns=['입력', '변환'])
+            df_map = pd.DataFrame(list(c_map.items()), columns=['입력', '변환'])
             edit = st.data_editor(
-                df,
+                df_map,
                 num_rows="dynamic",
                 use_container_width=True,
                 height=500,
@@ -576,11 +752,12 @@ elif st.session_state['page'] == 'admin':
                 database.clear_database()
                 st.toast("삭제 완료", icon="💥")
 
+
 # -------------------------------
 # Dashboard 페이지
 # -------------------------------
 else:
-    # 분석 전 상태
+    # 분석 전
     if st.session_state['analyzed_data'] is None:
         uploaded_file = st.file_uploader(
             "분석할 엑셀 파일을 드래그하거나 선택하세요",
@@ -600,7 +777,6 @@ else:
                             'filename': uploaded_file.name,
                             'elapsed': f"{e - s:.2f}s"
                         }
-                        # ✅✅✅ [추가] 새 분석 시작 시 PDF 버퍼 초기화
                         st.session_state["pdf_assets"] = []
                         st.session_state["pdf_bytes"] = None
                         st.rerun()
@@ -609,7 +785,7 @@ else:
                 except Exception as e:
                     st.error(f"Error: {e}")
 
-    # 분석 후 상태
+    # 분석 후
     else:
         data = st.session_state['analyzed_data']
         cleaned_data = data['cleaned_data']
@@ -617,8 +793,8 @@ else:
         excel_buffer = data['excel_buffer']
         filename = data['filename']
 
-        t_clean = sum(len(df) for df in cleaned_data.values())
-        t_trash = sum(len(df) for df in trash_data) if trash_data else 0
+        t_clean = sum(len(df_) for df_ in cleaned_data.values())
+        t_trash = sum(len(df_) for df_ in trash_data) if trash_data else 0
 
         # KPI 카드
         c1, c2, c3 = st.columns(3)
@@ -661,7 +837,6 @@ else:
 
         mask_check = st.checkbox("🔒 개인정보 마스킹 (이름/번호 가리기)", value=True)
 
-        # 상단 작업 버튼 3개
         col_act1, col_act2, col_act3 = st.columns(3, gap="medium")
 
         # 엑셀 다운로드
@@ -684,7 +859,7 @@ else:
                 key="dn_excel"
             )
 
-        # ✅✅✅ PDF 리포트: "대시보드에 표시된 것"을 그대로 PDF에도 추가
+        # PDF 리포트
         with col_act2:
             stats = {'total_rows': t_clean + t_trash, 'removed_rows': t_trash, 'missing_info_rows': 0}
             f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fonts', 'NanumGothic.ttf')
@@ -694,10 +869,8 @@ else:
                     st.error("폰트 없음")
                 else:
                     try:
-                        # ✅✅✅ 핵심: 지금 실행(run)에서 누적된 pdf_assets를 그대로 PDF에 넣는다
                         pdf_assets = st.session_state.get("pdf_assets", [])
                         if mask_check:
-                            # 표(assets)의 DF만 마스킹해서 PDF에 반영 (대시보드 표는 그대로)
                             masked_assets = []
                             for kind, title, payload in pdf_assets:
                                 if kind == "table" and isinstance(payload, pd.DataFrame):
@@ -712,7 +885,7 @@ else:
                         pdf = reporter.create_pdf_report(
                             stats,
                             cleaned_data,
-                            assets=pdf_assets,            # ✅✅✅ 대시보드에서 캡처한 그래프/표
+                            assets=pdf_assets,
                             title=f"Mice Excel Data Cleaner Pro - Report ({filename})",
                             font_path=f_path
                         )
@@ -734,27 +907,33 @@ else:
         # DB 저장
         with col_act3:
             if st.button("🗄️ DB에 저장하기", use_container_width=True, key="btn_db"):
-                suc, m = database.save_to_db(cleaned_data, filename)
+                db_payload = build_db_payload(cleaned_data)
+
+                with st.expander("🔎 DB에 저장될 데이터 미리보기 (DB 고정규격만 저장)", expanded=False):
+                    st.caption("DB 저장 규격 컬럼: " + ", ".join(DB_SCHEMA_COLS))
+                    preview_sheet = st.session_state.get("current_sheet") or list(db_payload.keys())[0]
+                    st.write(f"미리보기 시트: **{preview_sheet}**")
+                    st.dataframe(db_payload[preview_sheet].head(50), use_container_width=True, hide_index=True)
+
+                suc, m = database.save_to_db(db_payload, filename)
                 if suc:
-                    st.toast("저장 완료!", icon="✅")
+                    st.toast("저장 완료! (DB에는 고정 규격 컬럼만 저장됨)", icon="✅")
                 else:
                     st.error(m)
 
         st.markdown("---")
         t1, t2, t3 = st.tabs(["📊 인사이트 & 필터", "🗑️ 휴지통 (복구)", "💾 DB 히스토리"])
 
-        # -------------------------------
-        # Tab 1: 인사이트 & 필터
-        # -------------------------------
+        # =====================================================
+        # Tab 1: 인사이트 & 필터  (⭐️ 순서 고정 핵심 영역)
+        # =====================================================
         with t1:
             if cleaned_data:
-                # ✅✅✅ 이 탭이 그려질 때마다 "이번 화면" 기준으로 PDF 자산을 새로 쌓음
                 pdf_assets_reset()
-                # KPI 같은 요약도 표로 넣고 싶으면(선택) — 지금은 넣지 않음
 
                 c_sel1, c_sel2 = st.columns([1, 4])
                 with c_sel1:
-                    sh = st.selectbox("분석 시트", list(cleaned_data.keys()))
+                    sh = st.selectbox("분석 시트", list(cleaned_data.keys()), key="sheet_select")
 
                 if st.session_state['current_sheet'] != sh:
                     st.session_state['current_sheet'] = sh
@@ -764,110 +943,34 @@ else:
                 df = cleaned_data[sh]
 
                 with st.expander("🔍 상세 검색", expanded=False):
-                    cols = st.multiselect("필터 컬럼", df.columns)
-                    conds = {c: st.text_input(f"'{c}' 검색") for c in cols}
+                    cols = st.multiselect("필터 컬럼", df.columns, key="filter_cols")
+                    conds = {c: st.text_input(f"'{c}' 검색", key=f"cond_{c}") for c in cols}
                     view_df = df.copy()
                     for c, val in conds.items():
                         if val:
                             view_df = view_df[view_df[c].astype(str).str.contains(val, case=False, na=False)]
+                display_df = st.session_state['mail_df'] if st.session_state['mail_df'] is not None else view_df
 
-                # 템플릿
-                with st.expander("📧 메일/문자 템플릿 & 발송", expanded=False):
-                    st.info(f"사용 가능 변수: {', '.join([f'{{{c}}}' for c in df.columns])}")
-                    default_msg = """[MICE 2025 컨퍼런스] 사전등록 확정 안내
-
-안녕하세요, {이름}님.
-신청해주신 내용으로 등록이 정상적으로 완료되었습니다.
-
-▶ 소속: {소속}
-▶ 연락처: {전화번호}
-
-행사 당일, 등록데스크에서 본 메시지를 보여주시면 명찰을 수령하실 수 있습니다.
-감사합니다."""
-
-                    c_tmpl, c_mail = st.columns([1, 1])
-                    with c_tmpl:
-                        st.write("###### 📝 템플릿 작성")
-                        tmpl = st.text_area("템플릿 내용", default_msg, height=200)
-                        if st.button("템플릿 적용 (표에 추가)", key="apply_tmpl"):
-                            try:
-                                view_df2 = cleaner.generate_message_column(view_df, tmpl)
-                                st.session_state['mail_df'] = view_df2
-                                st.success("생성 완료! (아래 표 확인)")
-                            except Exception as e:
-                                st.error(f"생성 실패: {e}")
-
-                    display_df = st.session_state['mail_df'] if st.session_state['mail_df'] is not None else view_df
-
-                    with c_mail:
-                        st.write("###### 🚀 이메일 발송 (SMTP)")
-                        smtp_host = st.text_input("SMTP 서버", "smtp.gmail.com")
-                        smtp_port = st.number_input("포트", value=465)
-                        st.markdown("*보내는 메일 주소 (예: `myname@gmail.com`)*")
-                        sender_email = st.text_input("보내는 메일", label_visibility="collapsed")
-                        st.markdown("*앱 비밀번호 (일반 비밀번호 아님!)*")
-                        sender_pw = st.text_input("앱 비밀번호", type="password", label_visibility="collapsed")
-                        mail_subject = st.text_input("메일 제목", "[MICE 2025] 등록 안내")
-
-                        mail_cols = [c for c in display_df.columns if '이메일' in str(c) or 'email' in str(c).lower()]
-                        idx = list(display_df.columns).index(mail_cols[0]) if mail_cols else 0
-                        target_email_col = st.selectbox("받는 사람 이메일 컬럼", display_df.columns, index=idx)
-
-                        st.markdown("---")
-                        st.write("###### 🧪 테스트 발송")
-                        test_receiver = st.text_input("테스트 받는 사람 이메일", placeholder="me@example.com")
-
-                        if st.button("테스트 발송 (1건만)", key="test_mail_btn"):
-                            if not test_receiver:
-                                st.warning("테스트 이메일을 입력하세요.")
-                            elif '생성된_메시지' not in display_df.columns:
-                                st.error("먼저 템플릿을 적용해주세요.")
-                            else:
-                                test_df = display_df.head(1).copy().reset_index(drop=True)
-                                test_df[target_email_col] = test_receiver
-                                suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(
-                                    test_df, sender_email, sender_pw,
-                                    target_email_col, mail_subject,
-                                    '생성된_메시지',
-                                    smtp_host, smtp_port
-                                )
-                                if suc:
-                                    st.success(f"테스트 발송 성공! ({test_receiver})")
-                                else:
-                                    st.error(f"실패: {logs[0] if logs else 'Unknown'}")
-
-                        st.markdown("---")
-                        if st.button("전체 발송 시작 (주의)", type="primary", key="send_mail_real"):
-                            if '생성된_메시지' not in display_df.columns:
-                                st.error("먼저 '템플릿 적용' 버튼을 눌러 메시지를 생성해주세요.")
-                            elif not sender_email or not sender_pw:
-                                st.error("이메일 계정 정보를 입력해주세요.")
-                            else:
-                                send_df = display_df.reset_index(drop=True)
-                                suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(
-                                    send_df, sender_email, sender_pw,
-                                    target_email_col, mail_subject,
-                                    '생성된_메시지',
-                                    smtp_host, smtp_port
-                                )
-                                if suc:
-                                    st.success(f"발송 완료! (성공: {s_cnt}, 실패: {f_cnt})")
-                                else:
-                                    st.error(f"발송 실패: {logs[0] if logs else 'Unknown'}")
-
-                # [NEW] 만족도/리뷰 분석 섹션
+                # -------------------------------------------------
+                # (1) 만족도 & 리뷰 분석  ✅✅✅ 가장 먼저!
+                # -------------------------------------------------
                 st.markdown("---")
                 st.subheader("📊 만족도 및 리뷰 분석")
 
-                display_df = st.session_state['mail_df'] if st.session_state['mail_df'] is not None else df
+                rating_cols = [
+                    c for c in display_df.columns
+                    if any(k in str(c).lower() for k in ['평점', 'rating', 'score', '점수', 'nps', 'satisfaction', '만족도'])
+                ]
+                review_cols = [
+                    c for c in display_df.columns
+                    if any(k in str(c).lower() for k in ['리뷰', 'review', 'comment', 'comments', '의견', '코멘트', '후기'])
+                ]
 
-                rating_cols = [c for c in display_df.columns if any(k in str(c).lower() for k in ['평점', 'rating', 'score', '점수'])]
-                review_cols = [c for c in display_df.columns if any(k in str(c).lower() for k in ['리뷰', 'review', 'comment', '의견', '코멘트'])]
+                if not rating_cols and not review_cols:
+                    st.info("평점/리뷰 컬럼을 찾지 못했습니다. (컬럼명에 '평점' 또는 '리뷰'가 포함되어야 자동 분석됩니다.)")
 
-                # 1. 평점 분포 & NPS 분석
+                # 1) 평점 분포 & NPS
                 if rating_cols:
-                    st.markdown("---")
-                    st.subheader("📊 만족도 분석")
                     rating_col = rating_cols[0]
 
                     try:
@@ -908,7 +1011,6 @@ else:
                         display_df, x=rating_col, nbins=11,
                         title=f"📈 {rating_col} 분포 (0~10점)",
                         template="plotly_dark",
-                        color_discrete_sequence=['#6366f1']
                     )
                     fig_hist.update_layout(
                         paper_bgcolor="rgba(0,0,0,0)",
@@ -917,11 +1019,10 @@ else:
                         yaxis_title="인원 수",
                         bargap=0.1
                     )
-                    st.plotly_chart(fig_hist, use_container_width=True)
-                    # ✅✅✅ [추가] 화면에 그린 히스토그램을 PDF에도 추가
+                    st.plotly_chart(fig_hist, use_container_width=True, key=f"hist_{sh}_{rating_col}")
                     pdf_add_plotly(fig_hist, f"{sh} - {rating_col} 분포(히스토그램)")
 
-                # 2. 리뷰 텍스트 분석 (워드클라우드 + 빈도수)
+                # 2) 리뷰 키워드 분석
                 if review_cols:
                     review_col = review_cols[0]
                     st.markdown("---")
@@ -949,7 +1050,6 @@ else:
                                     ax.axis('off')
                                     fig.patch.set_facecolor('#0f1117')
                                     st.pyplot(fig)
-                                    # ✅✅✅ [추가] 워드클라우드를 PDF에도 추가
                                     pdf_add_mpl(fig, f"{sh} - 워드클라우드({review_col})")
                                 else:
                                     st.warning("텍스트가 없거나 폰트 파일이 없습니다.")
@@ -1022,12 +1122,7 @@ else:
                                         df_treemap,
                                         path=['Sentiment','Word'],
                                         values='Count',
-                                        color='Sentiment',
-                                        color_discrete_map={
-                                            '1. 긍정(9-10점)': '#6366f1',
-                                            '2. 중립(7-8점)': '#94a3b8',
-                                            '3. 부정(0-6점)': '#ef4444'
-                                        }
+                                        color='Sentiment'
                                     )
                                     fig_tree.update_layout(
                                         paper_bgcolor="rgba(0,0,0,0)",
@@ -1036,21 +1131,111 @@ else:
                                         margin=dict(t=20, l=0, r=0, b=0)
                                     )
                                     fig_tree.data[0].textinfo = "label+value"
-                                    st.plotly_chart(fig_tree, use_container_width=True)
-
-                                    # ✅✅✅ [추가] 트리맵을 PDF에도 추가
+                                    st.plotly_chart(fig_tree, use_container_width=True, key=f"tree_{sh}_{review_col}")
                                     pdf_add_plotly(fig_tree, f"{sh} - 평점별 핵심키워드(Treemap)")
-
-                                    # ✅✅✅ [추가] 키워드 표도 PDF에 추가(상위 80행)
                                     pdf_add_table(df_treemap, f"{sh} - 키워드 요약표", head=80)
                                 else:
                                     st.info("유의미한 키워드를 찾지 못했습니다.")
                             except Exception as e:
                                 st.error(f"분석 중 오류: {e}")
                         else:
-                            st.info("평점 데이터가 없어 전체 빈도수로 대체합니다.")
+                            st.info("평점 데이터가 없어 평점별 분류는 생략됩니다.")
 
-                # 3. 주요 인사이트 대시보드 (최대 6개)
+                # -------------------------------------------------
+                # (2) 등록일 분석 ✅ 만족도/리뷰 다음!
+                # -------------------------------------------------
+                render_registration_charts(display_df, sheet_name=sh)
+
+                # -------------------------------------------------
+                # (3) 메일/문자 템플릿
+                # -------------------------------------------------
+                with st.expander("📧 메일/문자 템플릿 & 발송", expanded=False):
+                    st.info(f"사용 가능 변수: {', '.join([f'{{{c}}}' for c in df.columns])}")
+                    default_msg = """[MICE 2025 컨퍼런스] 사전등록 확정 안내
+
+안녕하세요, {이름}님.
+신청해주신 내용으로 등록이 정상적으로 완료되었습니다.
+
+▶ 소속: {소속}
+▶ 연락처: {전화번호}
+
+행사 당일, 등록데스크에서 본 메시지를 보여주시면 명찰을 수령하실 수 있습니다.
+감사합니다."""
+
+                    c_tmpl, c_mail = st.columns([1, 1])
+                    with c_tmpl:
+                        st.write("###### 📝 템플릿 작성")
+                        tmpl = st.text_area("템플릿 내용", default_msg, height=200, key="tmpl_text")
+                        if st.button("템플릿 적용 (표에 추가)", key="apply_tmpl"):
+                            try:
+                                view_df2 = cleaner.generate_message_column(view_df, tmpl)
+                                st.session_state['mail_df'] = view_df2
+                                st.success("생성 완료! (아래 표 확인)")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"생성 실패: {e}")
+
+                    display_df2 = st.session_state['mail_df'] if st.session_state['mail_df'] is not None else view_df
+
+                    with c_mail:
+                        st.write("###### 🚀 이메일 발송 (SMTP)")
+                        smtp_host = st.text_input("SMTP 서버", "smtp.gmail.com", key="smtp_host")
+                        smtp_port = st.number_input("포트", value=465, key="smtp_port")
+                        st.markdown("*보내는 메일 주소 (예: `myname@gmail.com`)*")
+                        sender_email = st.text_input("보내는 메일", label_visibility="collapsed", key="sender_email")
+                        st.markdown("*앱 비밀번호 (일반 비밀번호 아님!)*")
+                        sender_pw = st.text_input("앱 비밀번호", type="password", label_visibility="collapsed", key="sender_pw")
+                        mail_subject = st.text_input("메일 제목", "[MICE 2025] 등록 안내", key="mail_subject")
+
+                        mail_cols = [c for c in display_df2.columns if '이메일' in str(c) or 'email' in str(c).lower()]
+                        idx = list(display_df2.columns).index(mail_cols[0]) if mail_cols else 0
+                        target_email_col = st.selectbox("받는 사람 이메일 컬럼", display_df2.columns, index=idx, key="target_email_col")
+
+                        st.markdown("---")
+                        st.write("###### 🧪 테스트 발송")
+                        test_receiver = st.text_input("테스트 받는 사람 이메일", placeholder="me@example.com", key="test_receiver")
+
+                        if st.button("테스트 발송 (1건만)", key="test_mail_btn"):
+                            if not test_receiver:
+                                st.warning("테스트 이메일을 입력하세요.")
+                            elif '생성된_메시지' not in display_df2.columns:
+                                st.error("먼저 템플릿을 적용해주세요.")
+                            else:
+                                test_df = display_df2.head(1).copy().reset_index(drop=True)
+                                test_df[target_email_col] = test_receiver
+                                suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(
+                                    test_df, sender_email, sender_pw,
+                                    target_email_col, mail_subject,
+                                    '생성된_메시지',
+                                    smtp_host, smtp_port
+                                )
+                                if suc:
+                                    st.success(f"테스트 발송 성공! ({test_receiver})")
+                                else:
+                                    st.error(f"실패: {logs[0] if logs else 'Unknown'}")
+
+                        st.markdown("---")
+                        if st.button("전체 발송 시작 (주의)", type="primary", key="send_mail_real"):
+                            if '생성된_메시지' not in display_df2.columns:
+                                st.error("먼저 '템플릿 적용' 버튼을 눌러 메시지를 생성해주세요.")
+                            elif not sender_email or not sender_pw:
+                                st.error("이메일 계정 정보를 입력해주세요.")
+                            else:
+                                send_df = display_df2.reset_index(drop=True)
+                                suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(
+                                    send_df, sender_email, sender_pw,
+                                    target_email_col, mail_subject,
+                                    '생성된_메시지',
+                                    smtp_host, smtp_port
+                                )
+                                if suc:
+                                    st.success(f"발송 완료! (성공: {s_cnt}, 실패: {f_cnt})")
+                                else:
+                                    st.error(f"발송 실패: {logs[0] if logs else 'Unknown'}")
+
+                # -------------------------------------------------
+                # (4) 주요 인사이트 대시보드
+                # -------------------------------------------------
                 st.markdown("---")
                 st.markdown("#### 📊 인사이트 대시보드")
 
@@ -1098,31 +1283,29 @@ else:
                                     plot_bgcolor="rgba(0,0,0,0)",
                                     height=400
                                 )
-                                st.plotly_chart(fig, use_container_width=True)
-
-                                # ✅✅✅ [추가] 인사이트 차트를 PDF에도 추가
+                                st.plotly_chart(fig, use_container_width=True, key=f"ins_{sh}_{col_name}_{i}")
                                 pdf_add_plotly(fig, f"{sh} - 인사이트({col_name})")
                     else:
                         st.info("대시보드를 만들 수 있는 적절한 컬럼이 없습니다.")
 
-                    # 4. 상세 데이터 테이블
+                    # -------------------------------------------------
+                    # (5) 상세 데이터 테이블
+                    # -------------------------------------------------
                     st.markdown("---")
                     st.markdown("#### 📋 상세 데이터")
                     st.dataframe(display_df, use_container_width=True, hide_index=True, height=500)
-
-                    # ✅✅✅ [추가] 상세 데이터 표도 PDF에 추가(상위 80행)
                     pdf_add_table(display_df, f"{sh} - 상세 데이터", head=80)
                 else:
                     st.warning("데이터 없음")
 
         # -------------------------------
-        # Tab 2: 휴지통 (복구) (원본 그대로)
+        # Tab 2: 휴지통 (복구)
         # -------------------------------
         with t2:
             if trash_data:
                 full_trash = pd.concat(trash_data)
                 sheets = full_trash['[원본시트]'].unique()
-                sel = st.selectbox("확인할 시트", sheets)
+                sel = st.selectbox("확인할 시트", sheets, key="trash_sheet")
                 subset = full_trash[full_trash['[원본시트]'] == sel].dropna(axis=1, how='all')
                 st.warning(f"🚨 {len(subset)}건 중복 제거됨")
 
@@ -1132,7 +1315,8 @@ else:
                     restore_df,
                     hide_index=True,
                     use_container_width=True,
-                    column_config={"선택": st.column_config.CheckboxColumn(required=True)}
+                    column_config={"선택": st.column_config.CheckboxColumn(required=True)},
+                    key="trash_editor"
                 )
 
                 if st.button("♻️ 선택 항목 복구", type="primary", key="restore_btn"):
@@ -1163,13 +1347,13 @@ else:
                 st.success("중복 없음")
 
         # -------------------------------
-        # Tab 3: DB 히스토리 (원본 그대로)
+        # Tab 3: DB 히스토리
         # -------------------------------
         with t3:
             tbls = database.get_table_names()
             if tbls:
-                target = st.selectbox("테이블 선택", tbls)
-                q = st.text_area("SQL 쿼리", f"SELECT * FROM {target} LIMIT 50")
+                target = st.selectbox("테이블 선택", tbls, key="db_table")
+                q = st.text_area("SQL 쿼리", f"SELECT * FROM {target} LIMIT 50", key="sql_text")
                 if st.button("쿼리 실행", use_container_width=True, key="sql_run"):
                     d, m = database.execute_query(q)
                     if d is not None:
