@@ -108,24 +108,25 @@ MICE 행사 종료 후 수집된 설문 데이터를 기반으로, **평점(0–
 ## 📂 프로젝트 구조 (Structure)
 
 ```text
-mice_excel_data_cleaner/
-├── 📄 app.py                  # 메인 실행 파일 (Streamlit Web App)
-├── 📄 make_sample.py          # 테스트용 대량 데이터(25,000건) 생성기
-├── 📄 requirements.txt        # 라이브러리 의존성 목록
-├── 📄 .env                    # (직접 생성) 관리자 ID/PW 설정 파일
-│
-├── 📂 modules/                # 핵심 기능 모듈 (기능별 분리)
-│   ├── cleaner.py             # 정제, 마스킹, 매핑, 템플릿 생성 로직
-│   ├── database.py            # DB 저장, Q&A 관리, SQL 실행 로직
-│   ├── mailer.py              # SMTP 이메일 대량 발송 로직
-│   └── reporter.py            # PDF 리포트 생성 로직
-│
-├── 📂 data/                   # (자동 생성) DB 및 설정 파일 저장소
-│   ├── cleaned_data.db        # 작업 이력 DB (SQLite)
-│   └── mapping_config.json    # 사용자 정의 매핑 규칙 JSON
-│
-└── 📂 fonts/                  # (필수) PDF용 한글 폰트 폴더
-    └── NanumGothic.ttf        # 네이버 나눔고딕 폰트
+.
+├─ app.py
+├─ views/
+│  ├─ dashboard.py
+│  ├─ admin.py
+│  └─ qna.py
+├─ ui/
+│  ├─ styles.py
+│  ├─ components.py
+│  └─ layout.py
+├─ services/
+│  ├─ analysis.py        # 평점/리뷰/등록일 분석 + 차트
+│  ├─ pdf_assets.py      # pdf_add_plotly, pdf_add_table...
+│  └─ state.py           # session_state 초기화/리셋
+└─ modules/
+   ├─ cleaner.py
+   ├─ database.py
+   ├─ reporter.py
+   └─ mailer.py
 
 
 ---
