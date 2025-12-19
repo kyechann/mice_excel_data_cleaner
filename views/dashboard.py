@@ -4,16 +4,20 @@ import io
 import time
 import os
 
-from modules import cleaner, database, reporter, mailer
+from modules import cleaner, database, reporter
 from core.db_schema import build_db_payload, DB_SCHEMA_COLS
 from core.pdf_assets import pdf_assets_reset
+
 from sections.satisfaction import render_satisfaction_and_review
 from sections.registration import render_registration_charts
 from sections.insights import render_insights_dashboard
+from sections.email_sender import render_email_sender
 
 def render_dashboard():
+    # ----------------------------
     # 분석 전 상태
-    if st.session_state["analyzed_data"] is None:
+    # ----------------------------
+    if st.session_state.get("analyzed_data") is None:
         uploaded_file = st.file_uploader(
             "분석할 엑셀 파일을 드래그하거나 선택하세요",
             type=["xlsx"]
@@ -35,6 +39,8 @@ def render_dashboard():
                         }
                         st.session_state["pdf_assets"] = []
                         st.session_state["pdf_bytes"] = None
+                        st.session_state["mail_df"] = None
+                        st.session_state["current_sheet"] = None
                         st.rerun()
                     else:
                         st.error(msg)
@@ -42,7 +48,9 @@ def render_dashboard():
                     st.error(f"Error: {e}")
         return
 
+    # ----------------------------
     # 분석 후 상태
+    # ----------------------------
     data = st.session_state["analyzed_data"]
     cleaned_data = data["cleaned_data"]
     trash_data = data["trash_data"]
@@ -127,6 +135,7 @@ def render_dashboard():
             else:
                 try:
                     pdf_assets = st.session_state.get("pdf_assets", [])
+
                     if mask_check:
                         masked_assets = []
                         for kind, title, payload in pdf_assets:
@@ -179,195 +188,125 @@ def render_dashboard():
                 st.error(m)
 
     st.markdown("---")
-    t1, t2, t3 = st.tabs(["📊 인사이트 & 필터", "🗑️ 휴지통 (복구)", "💾 DB 히스토리"])
 
-    # -------------------------------
-    # Tab 1: 인사이트 & 필터
-    # ✅ 순서 고정:
-    #   (1) 만족도/리뷰
-    #   (2) 등록일
-    #   (3) 템플릿
-    #   (4) 인사이트
-    #   (5) 표
-    # -------------------------------
-    with t1:
-        if cleaned_data:
-            pdf_assets_reset()
+    # ==========================================
+    # ✅ (공통) 시트 선택 + 상세 검색(필터)
+    #   - 인사이트 탭 / 메일링 탭이 같은 대상(view_df)을 공유
+    # ==========================================
+    if cleaned_data:
+        pdf_assets_reset()
 
-            c_sel1, _ = st.columns([1, 4])
-            with c_sel1:
-                sh = st.selectbox("분석 시트", list(cleaned_data.keys()))
+        c_sel1, _ = st.columns([1, 4])
+        with c_sel1:
+            sh = st.selectbox("분석 시트", list(cleaned_data.keys()), key="sheet_select")
 
-            if st.session_state.get("current_sheet") != sh:
-                st.session_state["current_sheet"] = sh
-                st.session_state["mail_df"] = None
-                st.session_state["pdf_bytes"] = None
+        # 시트 변경 시 메일 관련 상태 초기화
+        if st.session_state.get("current_sheet") != sh:
+            st.session_state["current_sheet"] = sh
+            st.session_state["mail_df"] = None
+            st.session_state["pdf_bytes"] = None
 
-            df = cleaned_data[sh]
+        df = cleaned_data[sh]
 
-            with st.expander("🔍 상세 검색", expanded=False):
-                cols = st.multiselect("필터 컬럼", df.columns)
-                conds = {c: st.text_input(f"'{c}' 검색") for c in cols}
-                view_df = df.copy()
-                for c, val in conds.items():
-                    if val:
-                        view_df = view_df[view_df[c].astype(str).str.contains(val, case=False, na=False)]
+        with st.expander("🔍 상세 검색", expanded=False):
+            cols = st.multiselect("필터 컬럼", df.columns, key=f"filter_cols_{sh}")
+            conds = {c: st.text_input(f"'{c}' 검색", key=f"filter_{sh}_{c}") for c in cols}
 
-            display_df = st.session_state["mail_df"] if st.session_state["mail_df"] is not None else view_df
+        # ✅ 필터 적용 결과(view_df)
+        view_df = df.copy()
+        for c, val in conds.items():
+            if val:
+                view_df = view_df[view_df[c].astype(str).str.contains(val, case=False, na=False)]
 
-            # (1) 만족도/리뷰 분석 (맨 먼저)
+        # 메일 템플릿 적용된 DF가 있으면 그걸 우선 사용
+        display_df = st.session_state["mail_df"] if st.session_state.get("mail_df") is not None else view_df
+
+        # ==========================================
+        # ✅ 탭 구성: 인사이트 / 메일링 / 휴지통 / DB
+        # ==========================================
+        t_insight, t_mail, t_trash, t_db = st.tabs(
+            ["📊 인사이트 & 필터", "📧 메일링", "🗑️ 휴지통 (복구)", "💾 DB 히스토리"]
+        )
+
+        # -------------------------------
+        # Tab 1: 인사이트
+        # -------------------------------
+        with t_insight:
+            # (1) 만족도/리뷰
             render_satisfaction_and_review(display_df, sheet_name=sh)
 
-            # (2) 등록일 분석 (그 다음)
+            # (2) 등록일
             render_registration_charts(display_df, sheet_name=sh)
 
-            # (3) 템플릿 & 발송
-            with st.expander("📧 메일/문자 템플릿 & 발송", expanded=False):
-                st.info(f"사용 가능 변수: {', '.join([f'{{{c}}}' for c in df.columns])}")
-                default_msg = """[MICE 2025 컨퍼런스] 사전등록 확정 안내
-
-안녕하세요, {이름}님.
-신청해주신 내용으로 등록이 정상적으로 완료되었습니다.
-
-▶ 소속: {소속}
-▶ 연락처: {전화번호}
-
-행사 당일, 등록데스크에서 본 메시지를 보여주시면 명찰을 수령하실 수 있습니다.
-감사합니다."""
-
-                c_tmpl, c_mail = st.columns([1, 1])
-                with c_tmpl:
-                    st.write("###### 📝 템플릿 작성")
-                    tmpl = st.text_area("템플릿 내용", default_msg, height=200)
-                    if st.button("템플릿 적용 (표에 추가)", key="apply_tmpl"):
-                        try:
-                            view_df2 = cleaner.generate_message_column(view_df, tmpl)
-                            st.session_state["mail_df"] = view_df2
-                            st.success("생성 완료! (아래 표 확인)")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"생성 실패: {e}")
-
-                display_df = st.session_state["mail_df"] if st.session_state["mail_df"] is not None else view_df
-
-                with c_mail:
-                    st.write("###### 🚀 이메일 발송 (SMTP)")
-                    smtp_host = st.text_input("SMTP 서버", "smtp.gmail.com")
-                    smtp_port = st.number_input("포트", value=465)
-                    st.markdown("*보내는 메일 주소 (예: `myname@gmail.com`)*")
-                    sender_email = st.text_input("보내는 메일", label_visibility="collapsed")
-                    st.markdown("*앱 비밀번호 (일반 비밀번호 아님!)*")
-                    sender_pw = st.text_input("앱 비밀번호", type="password", label_visibility="collapsed")
-                    mail_subject = st.text_input("메일 제목", "[MICE 2025] 등록 안내")
-
-                    mail_cols = [c for c in display_df.columns if "이메일" in str(c) or "email" in str(c).lower()]
-                    idx = list(display_df.columns).index(mail_cols[0]) if mail_cols else 0
-                    target_email_col = st.selectbox("받는 사람 이메일 컬럼", display_df.columns, index=idx)
-
-                    st.markdown("---")
-                    st.write("###### 🧪 테스트 발송")
-                    test_receiver = st.text_input("테스트 받는 사람 이메일", placeholder="me@example.com")
-
-                    if st.button("테스트 발송 (1건만)", key="test_mail_btn"):
-                        if not test_receiver:
-                            st.warning("테스트 이메일을 입력하세요.")
-                        elif "생성된_메시지" not in display_df.columns:
-                            st.error("먼저 템플릿을 적용해주세요.")
-                        else:
-                            test_df = display_df.head(1).copy().reset_index(drop=True)
-                            test_df[target_email_col] = test_receiver
-                            suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(
-                                test_df, sender_email, sender_pw,
-                                target_email_col, mail_subject,
-                                "생성된_메시지",
-                                smtp_host, smtp_port
-                            )
-                            if suc:
-                                st.success(f"테스트 발송 성공! ({test_receiver})")
-                            else:
-                                st.error(f"실패: {logs[0] if logs else 'Unknown'}")
-
-                    st.markdown("---")
-                    if st.button("전체 발송 시작 (주의)", type="primary", key="send_mail_real"):
-                        if "생성된_메시지" not in display_df.columns:
-                            st.error("먼저 '템플릿 적용' 버튼을 눌러 메시지를 생성해주세요.")
-                        elif not sender_email or not sender_pw:
-                            st.error("이메일 계정 정보를 입력해주세요.")
-                        else:
-                            send_df = display_df.reset_index(drop=True)
-                            suc, s_cnt, f_cnt, logs = mailer.send_bulk_emails(
-                                send_df, sender_email, sender_pw,
-                                target_email_col, mail_subject,
-                                "생성된_메시지",
-                                smtp_host, smtp_port
-                            )
-                            if suc:
-                                st.success(f"발송 완료! (성공: {s_cnt}, 실패: {f_cnt})")
-                            else:
-                                st.error(f"발송 실패: {logs[0] if logs else 'Unknown'}")
-
-            # (4) 인사이트 대시보드 + (5) 표
-            display_df = st.session_state["mail_df"] if st.session_state["mail_df"] is not None else view_df
+            # (3) 인사이트(차트+표)
             render_insights_dashboard(display_df, sheet_name=sh)
 
-    # -------------------------------
-    # Tab 2: 휴지통 (복구)  (원본 그대로)
-    # -------------------------------
-    with t2:
-        if trash_data:
-            full_trash = pd.concat(trash_data)
-            sheets = full_trash["[원본시트]"].unique()
-            sel = st.selectbox("확인할 시트", sheets)
-            subset = full_trash[full_trash["[원본시트]"] == sel].dropna(axis=1, how="all")
-            st.warning(f"🚨 {len(subset)}건 중복 제거됨")
+        # -------------------------------
+        # Tab 2: 메일링 (사진처럼 좌/우 + 미리보기)
+        # -------------------------------
+        with t_mail:
+            # ✅ 메일링 UI는 여기서만 보이도록 분리
+            render_email_sender(view_df=view_df, base_df=df, key_prefix=f"mail_{sh}")
 
-            restore_df = subset.copy()
-            restore_df.insert(0, "선택", False)
-            edited_trash = st.data_editor(
-                restore_df,
-                hide_index=True,
-                use_container_width=True,
-                column_config={"선택": st.column_config.CheckboxColumn(required=True)}
-            )
+        # -------------------------------
+        # Tab 3: 휴지통 (복구)
+        # -------------------------------
+        with t_trash:
+            if trash_data:
+                full_trash = pd.concat(trash_data)
+                sheets = full_trash["[원본시트]"].unique()
+                sel = st.selectbox("확인할 시트", sheets, key="trash_sheet")
+                subset = full_trash[full_trash["[원본시트]"] == sel].dropna(axis=1, how="all")
+                st.warning(f"🚨 {len(subset)}건 중복 제거됨")
 
-            if st.button("♻️ 선택 항목 복구", type="primary", key="restore_btn"):
-                to_restore = edited_trash[edited_trash["선택"] == True]
-                if not to_restore.empty:
-                    rows = to_restore.drop(columns=["선택"])
-                    if "[원본시트]" in rows.columns:
-                        rows = rows.drop(columns=["[원본시트]"])
-                    cur = st.session_state["analyzed_data"]["cleaned_data"][sel]
-                    st.session_state["analyzed_data"]["cleaned_data"][sel] = pd.concat([cur, rows], ignore_index=True)
+                restore_df = subset.copy()
+                restore_df.insert(0, "선택", False)
+                edited_trash = st.data_editor(
+                    restore_df,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={"선택": st.column_config.CheckboxColumn(required=True)},
+                    key="trash_editor"
+                )
 
-                    rem = edited_trash[edited_trash["선택"] == False].drop(columns=["선택"])
-                    oth = full_trash[full_trash["[원본시트]"] != sel]
-                    new_trash = []
-                    if not rem.empty:
-                        new_trash.append(rem)
-                    if not oth.empty:
-                        new_trash.append(oth)
-                    st.session_state["analyzed_data"]["trash_data"] = new_trash
-                    st.toast("복구 완료!", icon="✅")
-                    time.sleep(0.5)
-                    st.rerun()
-                else:
-                    st.warning("항목 선택 필요")
-        else:
-            st.success("중복 없음")
+                if st.button("♻️ 선택 항목 복구", type="primary", key="restore_btn"):
+                    to_restore = edited_trash[edited_trash["선택"] == True]
+                    if not to_restore.empty:
+                        rows = to_restore.drop(columns=["선택"])
+                        if "[원본시트]" in rows.columns:
+                            rows = rows.drop(columns=["[원본시트]"])
+                        cur = st.session_state["analyzed_data"]["cleaned_data"][sel]
+                        st.session_state["analyzed_data"]["cleaned_data"][sel] = pd.concat([cur, rows], ignore_index=True)
 
-    # -------------------------------
-    # Tab 3: DB 히스토리 (원본 그대로)
-    # -------------------------------
-    with t3:
-        tbls = database.get_table_names()
-        if tbls:
-            target = st.selectbox("테이블 선택", tbls)
-            q = st.text_area("SQL 쿼리", f"SELECT * FROM {target} LIMIT 50")
-            if st.button("쿼리 실행", use_container_width=True, key="sql_run"):
-                d, m = database.execute_query(q)
-                if d is not None:
-                    st.dataframe(d)
-                else:
-                    st.error(m)
-        else:
-            st.info("데이터 없음")
+                        rem = edited_trash[edited_trash["선택"] == False].drop(columns=["선택"])
+                        oth = full_trash[full_trash["[원본시트]"] != sel]
+                        new_trash = []
+                        if not rem.empty:
+                            new_trash.append(rem)
+                        if not oth.empty:
+                            new_trash.append(oth)
+                        st.session_state["analyzed_data"]["trash_data"] = new_trash
+                        st.toast("복구 완료!", icon="✅")
+                        time.sleep(0.5)
+                        st.rerun()
+                    else:
+                        st.warning("항목 선택 필요")
+            else:
+                st.success("중복 없음")
+
+        # -------------------------------
+        # Tab 4: DB 히스토리
+        # -------------------------------
+        with t_db:
+            tbls = database.get_table_names()
+            if tbls:
+                target = st.selectbox("테이블 선택", tbls, key="db_table")
+                q = st.text_area("SQL 쿼리", f"SELECT * FROM {target} LIMIT 50", key="sql_text")
+                if st.button("쿼리 실행", use_container_width=True, key="sql_run"):
+                    d, m = database.execute_query(q)
+                    if d is not None:
+                        st.dataframe(d)
+                    else:
+                        st.error(m)
+            else:
+                st.info("데이터 없음")
