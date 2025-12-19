@@ -93,6 +93,20 @@ def render_email_sender(view_df: pd.DataFrame, base_df: pd.DataFrame, key_prefix
                 index=default_idx,
                 key=f"{kp}_EMAIL_COL",
             )
+            st.markdown("---")
+            st.markdown("#### 📎 첨부파일")
+            uploaded_attachments = st.file_uploader(
+                "첨부파일 업로드 (여러 개 가능)",
+                type=None,
+                accept_multiple_files=True,
+                key=f"{key_prefix}_attachments"
+            )
+
+            attachments_payload = []
+            if uploaded_attachments:
+                for f in uploaded_attachments:
+                    attachments_payload.append((f.name, f.getvalue(), f.type))
+                st.caption(f"첨부 {len(attachments_payload)}개 준비됨")
 
             st.markdown("---")
             st.markdown("#### ✅ 테스트 발송")
@@ -127,6 +141,7 @@ def render_email_sender(view_df: pd.DataFrame, base_df: pd.DataFrame, key_prefix
                             "생성된_메시지",
                             smtp_host,
                             int(smtp_port),
+                            attachments=attachments_payload,
                         )
                         if suc:
                             st.success(f"테스트 발송 성공! ({test_receiver})")
@@ -151,6 +166,7 @@ def render_email_sender(view_df: pd.DataFrame, base_df: pd.DataFrame, key_prefix
                             "생성된_메시지",
                             smtp_host,
                             int(smtp_port),
+                            attachments=attachments_payload, 
                         )
                         if suc:
                             st.success(f"발송 완료! (성공: {s_cnt}, 실패: {f_cnt})")
