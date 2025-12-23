@@ -13,3 +13,4 @@ matplotlib
 kiwipiepy
 kaleido
 reportlab
+streamlit-elements
