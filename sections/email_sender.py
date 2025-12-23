@@ -3,6 +3,7 @@ import streamlit as st
 import pandas as pd
 import io
 from datetime import datetime
+import html
 
 from modules import cleaner, mailer
 
@@ -132,6 +133,63 @@ def _check_attach_size(payload):
         return False, total
     return True, total
 
+def _render_message_cards(df: pd.DataFrame, msg_col: str = "생성된_메시지", n: int = 1, cols: int = 1):
+    if df is None or df.empty or msg_col not in df.columns:
+        st.info("미리볼 메시지가 없습니다.")
+        return
+
+    msgs = (
+        df[msg_col]
+        .dropna()
+        .astype(str)
+        .head(n)
+        .tolist()
+    )
+    if not msgs:
+        st.info("미리볼 메시지가 없습니다.")
+        return
+
+    # ✅ 카드 CSS (한 번만 주입)
+    st.markdown(
+        """
+        <style>
+        .msg-card{
+            background: rgba(255,255,255,0.04);
+            border: 1px solid rgba(255,255,255,0.10);
+            border-radius: 18px;
+            padding: 18px 18px 14px 18px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+            margin: 10px 0 16px 0;
+        }
+        .msg-title{
+            font-size: 16px;
+            font-weight: 800;
+            opacity: 0.9;
+            margin-bottom: 10px;
+        }
+        .msg-pre{
+            white-space: pre-wrap;
+            word-break: break-word;
+            font-size: 15px;
+            line-height: 1.6;
+            margin: 0;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,  # ✅ 핵심
+    )
+
+    # cols=1로 쓰면 하나만 예쁘게
+    for i, m in enumerate(msgs, start=1):
+        safe = html.escape(m)  # ✅ 메시지에 < > 가 있어도 안전하게
+        st.markdown(
+            f"""
+            <div class="msg-card">
+              <pre class="msg-pre">{safe}</pre>
+            </div>
+            """,
+            unsafe_allow_html=True,  # ✅ 핵심
+        )
 
 # -----------------------------
 # Main UI
@@ -362,7 +420,10 @@ def render_email_sender(view_df: pd.DataFrame, base_df: pd.DataFrame, key_prefix
             if "생성된_메시지" in send2.columns:
                 st.markdown("---")
                 st.markdown("#### 미리보기(상위 3명)")
-                st.dataframe(send2[["생성된_메시지"]].head(3), use_container_width=True, hide_index=True)
+
+                # ✅ 템플릿 카드처럼 보여주기
+                _render_message_cards(send2, msg_col="생성된_메시지", n=3, cols=1)  # 1단 카드
+                # _render_message_cards(send2, msg_col="생성된_메시지", n=4, cols=2) # 2단 카드 원하면 이걸로
             else:
                 st.info("아직 '생성된_메시지'가 없습니다. 위에서 템플릿 적용을 눌러주세요.")
                 
@@ -699,8 +760,8 @@ def render_email_sender(view_df: pd.DataFrame, base_df: pd.DataFrame, key_prefix
 
             if "생성된_메시지" in send2.columns:
                 st.markdown("---")
-                st.markdown("#### 미리보기(상위 3명)")
-                st.dataframe(send2[["생성된_메시지"]].head(3), use_container_width=True, hide_index=True)
+                st.markdown("#### 미리보기")
+                _render_message_cards(send2, msg_col="생성된_메시지", n=1, cols=1) 
             else:
                 st.info("아직 '생성된_메시지'가 없습니다. 위에서 템플릿 적용을 눌러주세요.")
 
