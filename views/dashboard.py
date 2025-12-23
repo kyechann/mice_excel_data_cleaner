@@ -9,9 +9,10 @@ from core.db_schema import build_db_payload, DB_SCHEMA_COLS
 from core.pdf_assets import pdf_assets_reset
 
 from sections.satisfaction import render_satisfaction_and_review
-from sections.registration import render_registration_charts
-from sections.insights import render_insights_dashboard
+from sections.registration import build_registration_figs
+from sections.insights import build_insight_figs, render_detail_table
 from sections.email_sender import render_email_sender
+
 
 def render_dashboard():
     # ----------------------------
@@ -191,7 +192,6 @@ def render_dashboard():
 
     # ==========================================
     # ✅ (공통) 시트 선택 + 상세 검색(필터)
-    #   - 인사이트 탭 / 메일링 탭이 같은 대상(view_df)을 공유
     # ==========================================
     if cleaned_data:
         pdf_assets_reset()
@@ -232,20 +232,50 @@ def render_dashboard():
         # Tab 1: 인사이트
         # -------------------------------
         with t_insight:
-            # (1) 만족도/리뷰
+            # ✅ (예외) 리뷰/평점 대시보드 (2열 강제 X)
             render_satisfaction_and_review(display_df, sheet_name=sh)
+            st.markdown("---")
 
-            # (2) 등록일
-            render_registration_charts(display_df, sheet_name=sh)
+            # ✅ 나머지 대시보드: 전부 2열 고정 배치
+            reg_figs = build_registration_figs(display_df)
+            ins_figs = build_insight_figs(display_df, sheet_name=sh, max_cols=12)
 
-            # (3) 인사이트(차트+표)
-            render_insights_dashboard(display_df, sheet_name=sh)
+            items = []
+
+            # 등록 관련: 원하는 순서로 고정
+            reg_order = [
+                ("trend", "📈 등록 추이"),
+                ("cum",   "📈 누적 등록수"),
+                ("stack", "📊 참가구분별 등록"),
+                ("heat",  "🗓️ 등록 패턴(월×요일)"),
+            ]
+            for k, title in reg_order:
+                fig = reg_figs.get(k)
+                if fig is not None:
+                    items.append((f"reg_{k}", title, fig))
+
+            # 인사이트: 직급/회사/성별/나이대 등
+            for k, v in ins_figs.items():
+                title = v.get("title", k)
+                fig = v.get("fig")
+                if fig is not None:
+                    items.append((k, title, fig))
+
+            # ✅ 2열 렌더
+            colL, colR = st.columns(2, gap="large")
+            for i, (_, title, fig) in enumerate(items):
+                target = colL if i % 2 == 0 else colR
+                with target:
+                    st.markdown(f"#### {title}")
+                    st.plotly_chart(fig, use_container_width=True)
+
+            # ✅ (예외) 상세 데이터는 맨 아래 전체폭
+            render_detail_table(display_df, sheet_name=sh)
 
         # -------------------------------
-        # Tab 2: 메일링 (사진처럼 좌/우 + 미리보기)
+        # Tab 2: 메일링
         # -------------------------------
         with t_mail:
-            # ✅ 메일링 UI는 여기서만 보이도록 분리
             render_email_sender(view_df=view_df, base_df=df, key_prefix=f"mail_{sh}")
 
         # -------------------------------
