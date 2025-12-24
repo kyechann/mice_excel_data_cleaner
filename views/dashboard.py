@@ -14,6 +14,15 @@ from sections.insights import build_insight_figs, render_detail_table
 from sections.email_sender import render_email_sender
 
 
+def _menu_selector(label: str, options: list, default: str):
+    """
+    Streamlit 버전에 따라 segmented_control이 없을 수 있어서 fallback 제공.
+    """
+    if hasattr(st, "segmented_control"):
+        return st.segmented_control(label, options, default=default)
+    return st.radio(label, options, index=options.index(default), horizontal=True)
+
+
 def render_dashboard():
     # ----------------------------
     # 분석 전 상태
@@ -104,7 +113,9 @@ def render_dashboard():
 
     col_act1, col_act2, col_act3 = st.columns(3, gap="medium")
 
+    # ----------------------------
     # 엑셀 다운로드
+    # ----------------------------
     with col_act1:
         final_buffer = excel_buffer
         if mask_check:
@@ -124,7 +135,9 @@ def render_dashboard():
             key="dn_excel"
         )
 
+    # ----------------------------
     # PDF 리포트
+    # ----------------------------
     with col_act2:
         stats = {"total_rows": t_clean + t_trash, "removed_rows": t_trash, "missing_info_rows": 0}
         f_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "fonts", "NanumGothic.ttf")
@@ -171,7 +184,9 @@ def render_dashboard():
                 key="dn_pdf"
             )
 
+    # ----------------------------
     # DB 저장
+    # ----------------------------
     with col_act3:
         if st.button("🗄️ DB에 저장하기", use_container_width=True, key="btn_db"):
             db_payload = build_db_payload(cleaned_data)
@@ -191,152 +206,192 @@ def render_dashboard():
     st.markdown("---")
 
     # ==========================================
-    # ✅ (공통) 시트 선택 + 상세 검색(필터)
+    # ✅ 공통: 시트 선택 + 상세 검색(필터)
     # ==========================================
-    if cleaned_data:
+    if not cleaned_data:
+        st.info("정제된 데이터가 없습니다.")
+        return
+
+    c_sel1, _ = st.columns([1, 4])
+    with c_sel1:
+        sh = st.selectbox("분석 시트", list(cleaned_data.keys()), key="sheet_select")
+
+    # 시트 변경 처리 (초기화는 여기서만)
+    prev_sh = st.session_state.get("current_sheet")
+    if prev_sh != sh:
+        st.session_state["current_sheet"] = sh
+        st.session_state["mail_df"] = None
+        st.session_state["pdf_bytes"] = None
+        # ✅ PDF asset reset은 시트 변경 시에만
         pdf_assets_reset()
 
-        c_sel1, _ = st.columns([1, 4])
-        with c_sel1:
-            sh = st.selectbox("분석 시트", list(cleaned_data.keys()), key="sheet_select")
+    df = cleaned_data[sh]
 
-        # 시트 변경 시 메일 관련 상태 초기화
-        if st.session_state.get("current_sheet") != sh:
-            st.session_state["current_sheet"] = sh
-            st.session_state["mail_df"] = None
-            st.session_state["pdf_bytes"] = None
+    # ✅ 필터 상태 저장 키(시트별)
+    FILTER_STATE_KEY = f"filters_{sh}"
 
-        df = cleaned_data[sh]
+    with st.expander("🔍 상세 검색", expanded=False):
+        prev_conds = st.session_state.get(FILTER_STATE_KEY, {})
+        prev_cols = list(prev_conds.keys())
 
-        with st.expander("🔍 상세 검색", expanded=False):
-            cols = st.multiselect("필터 컬럼", df.columns, key=f"filter_cols_{sh}")
-            conds = {c: st.text_input(f"'{c}' 검색", key=f"filter_{sh}_{c}") for c in cols}
+        # ✅ 타이핑마다 rerun 방지: form 제출형
+        with st.form(f"filter_form_{sh}"):
+            cols_sel = st.multiselect("필터 컬럼", df.columns, default=prev_cols, key=f"filter_cols_{sh}")
+            conds_new = {}
+            for c in cols_sel:
+                conds_new[c] = st.text_input(
+                    f"'{c}' 검색",
+                    value=prev_conds.get(c, ""),
+                    key=f"filter_val_{sh}_{c}",
+                )
+            apply_btn = st.form_submit_button("✅ 필터 적용")
 
-        # ✅ 필터 적용 결과(view_df)
-        view_df = df.copy()
-        for c, val in conds.items():
-            if val:
-                view_df = view_df[view_df[c].astype(str).str.contains(val, case=False, na=False)]
+        if apply_btn:
+            # 빈 값 제거해서 상태 저장
+            cleaned_conds = {k: v for k, v in conds_new.items() if (v or "").strip()}
+            st.session_state[FILTER_STATE_KEY] = cleaned_conds
+            st.toast("필터가 적용되었습니다.", icon="🔍")
+            st.rerun()
 
-        # 메일 템플릿 적용된 DF가 있으면 그걸 우선 사용
-        display_df = st.session_state["mail_df"] if st.session_state.get("mail_df") is not None else view_df
+        # 현재 적용중인 필터 요약
+        cur_conds = st.session_state.get(FILTER_STATE_KEY, {})
+        if cur_conds:
+            st.caption("현재 적용 중:")
+            st.code("\n".join([f"- {k}: {v}" for k, v in cur_conds.items()]))
+        else:
+            st.caption("현재 적용 중인 필터 없음")
 
-        # ==========================================
-        # ✅ 탭 구성: 인사이트 / 메일링 / 휴지통 / DB
-        # ==========================================
-        t_insight, t_mail, t_trash, t_db = st.tabs(
-            ["📊 인사이트 & 필터", "📧 메일링", "🗑️ 휴지통 (복구)", "💾 DB 히스토리"]
-        )
+    # ✅ 필터 적용 결과(view_df)
+    cur_conds = st.session_state.get(FILTER_STATE_KEY, {})
+    view_df = df
+    for c, val in cur_conds.items():
+        if c in view_df.columns and val:
+            view_df = view_df[view_df[c].astype(str).str.contains(val, case=False, na=False)]
 
-        # -------------------------------
-        # Tab 1: 인사이트
-        # -------------------------------
-        with t_insight:
-            # ✅ (예외) 리뷰/평점 대시보드 (2열 강제 X)
-            render_satisfaction_and_review(display_df, sheet_name=sh)
-            st.markdown("---")
+    # 메일 템플릿 적용된 DF가 있으면 그걸 우선 사용
+    display_df = st.session_state["mail_df"] if st.session_state.get("mail_df") is not None else view_df
 
-            # ✅ 나머지 대시보드: 전부 2열 고정 배치
-            reg_figs = build_registration_figs(display_df)
-            ins_figs = build_insight_figs(display_df, sheet_name=sh, max_cols=12)
+    # ==========================================
+    # ✅ “현재 화면만 실행” 메뉴 (tabs 대신)
+    # ==========================================
+    menu = _menu_selector(
+        "메뉴",
+        ["📊 인사이트 & 필터", "📧 메일링", "🗑️ 휴지통 (복구)", "💾 DB 히스토리"],
+        default="📊 인사이트 & 필터",
+    )
+    st.markdown("---")
 
-            items = []
+    # -------------------------------
+    # 1) 인사이트
+    # -------------------------------
+    if menu == "📊 인사이트 & 필터":
+        # ✅ (예외) 리뷰/평점 대시보드 (2열 강제 X)
+        render_satisfaction_and_review(display_df, sheet_name=sh)
+        st.markdown("---")
 
-            # 등록 관련: 원하는 순서로 고정
-            reg_order = [
-                ("trend", "📈 등록 추이"),
-                ("cum",   "📈 누적 등록수"),
-                ("stack", "📊 참가구분별 등록"),
-                ("heat",  "🗓️ 등록 패턴(월×요일)"),
-            ]
-            for k, title in reg_order:
-                fig = reg_figs.get(k)
-                if fig is not None:
-                    items.append((f"reg_{k}", title, fig))
+        # ✅ 나머지 대시보드: 전부 2열 고정 배치
+        reg_figs = build_registration_figs(display_df)
+        ins_figs = build_insight_figs(display_df, sheet_name=sh, max_cols=12)
 
-            # 인사이트: 직급/회사/성별/나이대 등
+        items = []
+
+        # 등록 관련: 원하는 순서로 고정
+        reg_order = [
+            ("trend", "📈 등록 추이"),
+            ("cum",   "📈 누적 등록수"),
+            ("stack", "📊 참가구분별 등록"),
+            ("heat",  "🗓️ 등록 패턴(월×요일)"),
+        ]
+        for k, title in reg_order:
+            fig = reg_figs.get(k) if isinstance(reg_figs, dict) else None
+            if fig is not None:
+                items.append((f"reg_{k}", title, fig))
+
+        # 인사이트: 직급/회사/성별/나이대 등
+        if isinstance(ins_figs, dict):
             for k, v in ins_figs.items():
-                title = v.get("title", k)
-                fig = v.get("fig")
+                title = v.get("title", k) if isinstance(v, dict) else str(k)
+                fig = v.get("fig") if isinstance(v, dict) else None
                 if fig is not None:
                     items.append((k, title, fig))
 
-            # ✅ 2열 렌더
-            colL, colR = st.columns(2, gap="large")
-            for i, (_, title, fig) in enumerate(items):
-                target = colL if i % 2 == 0 else colR
-                with target:
-                    st.markdown(f"#### {title}")
-                    st.plotly_chart(fig, use_container_width=True)
+        # ✅ 2열 렌더
+        colL, colR = st.columns(2, gap="large")
+        for i, (_, title, fig) in enumerate(items):
+            target = colL if i % 2 == 0 else colR
+            with target:
+                st.markdown(f"#### {title}")
+                st.plotly_chart(fig, use_container_width=True)
 
-            # ✅ (예외) 상세 데이터는 맨 아래 전체폭
-            render_detail_table(display_df, sheet_name=sh)
+        # ✅ (예외) 상세 데이터는 맨 아래 전체폭
+        render_detail_table(display_df, sheet_name=sh)
 
-        # -------------------------------
-        # Tab 2: 메일링
-        # -------------------------------
-        with t_mail:
-            render_email_sender(view_df=view_df, base_df=df, key_prefix=f"mail_{sh}")
+    # -------------------------------
+    # 2) 메일링
+    # -------------------------------
+    elif menu == "📧 메일링":
+        # ✅ 여기서만 email_sender 실행 => 체감 속도 크게 개선
+        render_email_sender(view_df=view_df, base_df=df, key_prefix=f"mail_{sh}")
 
-        # -------------------------------
-        # Tab 3: 휴지통 (복구)
-        # -------------------------------
-        with t_trash:
-            if trash_data:
-                full_trash = pd.concat(trash_data)
-                sheets = full_trash["[원본시트]"].unique()
-                sel = st.selectbox("확인할 시트", sheets, key="trash_sheet")
-                subset = full_trash[full_trash["[원본시트]"] == sel].dropna(axis=1, how="all")
-                st.warning(f"🚨 {len(subset)}건 중복 제거됨")
+    # -------------------------------
+    # 3) 휴지통 (복구)
+    # -------------------------------
+    elif menu == "🗑️ 휴지통 (복구)":
+        if trash_data:
+            full_trash = pd.concat(trash_data)
+            sheets = full_trash["[원본시트]"].unique()
+            sel = st.selectbox("확인할 시트", sheets, key="trash_sheet")
+            subset = full_trash[full_trash["[원본시트]"] == sel].dropna(axis=1, how="all")
+            st.warning(f"🚨 {len(subset)}건 중복 제거됨")
 
-                restore_df = subset.copy()
-                restore_df.insert(0, "선택", False)
-                edited_trash = st.data_editor(
-                    restore_df,
-                    hide_index=True,
-                    use_container_width=True,
-                    column_config={"선택": st.column_config.CheckboxColumn(required=True)},
-                    key="trash_editor"
-                )
+            restore_df = subset.copy()
+            restore_df.insert(0, "선택", False)
+            edited_trash = st.data_editor(
+                restore_df,
+                hide_index=True,
+                use_container_width=True,
+                column_config={"선택": st.column_config.CheckboxColumn(required=True)},
+                key="trash_editor"
+            )
 
-                if st.button("♻️ 선택 항목 복구", type="primary", key="restore_btn"):
-                    to_restore = edited_trash[edited_trash["선택"] == True]
-                    if not to_restore.empty:
-                        rows = to_restore.drop(columns=["선택"])
-                        if "[원본시트]" in rows.columns:
-                            rows = rows.drop(columns=["[원본시트]"])
-                        cur = st.session_state["analyzed_data"]["cleaned_data"][sel]
-                        st.session_state["analyzed_data"]["cleaned_data"][sel] = pd.concat([cur, rows], ignore_index=True)
+            if st.button("♻️ 선택 항목 복구", type="primary", key="restore_btn"):
+                to_restore = edited_trash[edited_trash["선택"] == True]
+                if not to_restore.empty:
+                    rows = to_restore.drop(columns=["선택"])
+                    if "[원본시트]" in rows.columns:
+                        rows = rows.drop(columns=["[원본시트]"])
+                    cur = st.session_state["analyzed_data"]["cleaned_data"][sel]
+                    st.session_state["analyzed_data"]["cleaned_data"][sel] = pd.concat([cur, rows], ignore_index=True)
 
-                        rem = edited_trash[edited_trash["선택"] == False].drop(columns=["선택"])
-                        oth = full_trash[full_trash["[원본시트]"] != sel]
-                        new_trash = []
-                        if not rem.empty:
-                            new_trash.append(rem)
-                        if not oth.empty:
-                            new_trash.append(oth)
-                        st.session_state["analyzed_data"]["trash_data"] = new_trash
-                        st.toast("복구 완료!", icon="✅")
-                        time.sleep(0.5)
-                        st.rerun()
-                    else:
-                        st.warning("항목 선택 필요")
-            else:
-                st.success("중복 없음")
+                    rem = edited_trash[edited_trash["선택"] == False].drop(columns=["선택"])
+                    oth = full_trash[full_trash["[원본시트]"] != sel]
+                    new_trash = []
+                    if not rem.empty:
+                        new_trash.append(rem)
+                    if not oth.empty:
+                        new_trash.append(oth)
+                    st.session_state["analyzed_data"]["trash_data"] = new_trash
+                    st.toast("복구 완료!", icon="✅")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.warning("항목 선택 필요")
+        else:
+            st.success("중복 없음")
 
-        # -------------------------------
-        # Tab 4: DB 히스토리
-        # -------------------------------
-        with t_db:
-            tbls = database.get_table_names()
-            if tbls:
-                target = st.selectbox("테이블 선택", tbls, key="db_table")
-                q = st.text_area("SQL 쿼리", f"SELECT * FROM {target} LIMIT 50", key="sql_text")
-                if st.button("쿼리 실행", use_container_width=True, key="sql_run"):
-                    d, m = database.execute_query(q)
-                    if d is not None:
-                        st.dataframe(d)
-                    else:
-                        st.error(m)
-            else:
-                st.info("데이터 없음")
+    # -------------------------------
+    # 4) DB 히스토리
+    # -------------------------------
+    else:
+        tbls = database.get_table_names()
+        if tbls:
+            target = st.selectbox("테이블 선택", tbls, key="db_table")
+            q = st.text_area("SQL 쿼리", f"SELECT * FROM {target} LIMIT 50", key="sql_text")
+            if st.button("쿼리 실행", use_container_width=True, key="sql_run"):
+                d, m = database.execute_query(q)
+                if d is not None:
+                    st.dataframe(d)
+                else:
+                    st.error(m)
+        else:
+            st.info("데이터 없음")
