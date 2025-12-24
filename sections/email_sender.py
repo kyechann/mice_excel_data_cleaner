@@ -423,7 +423,26 @@ def render_email_sender(view_df: pd.DataFrame, base_df: pd.DataFrame, key_prefix
             if "생성된_메시지" in send2.columns:
                 st.markdown("---")
                 st.markdown("#### 미리보기")
-                _render_message_cards(send2, msg_col="생성된_메시지", n=1)
+
+                preview_msg = ""
+                try:
+                    preview_msg = (
+                        send2["생성된_메시지"]
+                        .dropna()
+                        .astype(str)
+                        .iloc[0]
+                    )
+                except Exception:
+                    preview_msg = ""
+
+                st.text_area(
+                    "미리보기",
+                    value=preview_msg,
+                    height=260,                 # 템플릿이랑 동일하게
+                    disabled=True,              # ✅ 읽기 전용처럼 보이게
+                    label_visibility="collapsed",
+                    key=f"{kp}_PREVIEW_TEXTAREA"  # ✅ kp 붙여서 충돌 방지
+                )
             else:
                 st.info("아직 '생성된_메시지'가 없습니다. 위에서 템플릿 적용을 눌러주세요.")
 
